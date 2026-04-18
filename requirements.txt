@@ -1,3 +1,4 @@
 streamlit
-plotly
+requests
 pandas
+plotly
