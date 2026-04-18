@@ -3,71 +3,130 @@ import requests
 import pandas as pd
 import plotly.express as px
 
-st.set_page_config(page_title="Aster DEX", layout="wide")
+st.set_page_config(page_title="Perp DEX Markets", layout="wide")
 
-BASE_URL = "https://fapi.asterdex.com"
+# --- Константи ---
+ASTER_BASE = "https://fapi.asterdex.com"
+HL_BASE = "https://api.hyperliquid.xyz/info"
+
+# --- Функції отримання даних ---
 
 @st.cache_data(ttl=30)
-def fetch_ticker_24h():
-    resp = requests.get(f"{BASE_URL}/fapi/v1/ticker/24hr", timeout=10)
+def fetch_aster():
+    resp = requests.get(f"{ASTER_BASE}/fapi/v1/ticker/24hr", timeout=10)
     resp.raise_for_status()
     return resp.json()
 
-st.title("Aster DEX — Live Market Data")
-st.caption("Дані оновлюються кожні 30 секунд. Джерело: fapi.asterdex.com")
-
-with st.spinner("Завантаження даних з Aster API..."):
-    try:
-        tickers = fetch_ticker_24h()
-    except Exception as e:
-        st.error(f"Помилка API: {e}")
-        st.stop()
-
-df = pd.DataFrame(tickers)
-
-numeric_cols = ["lastPrice", "priceChangePercent", "volume", "quoteVolume",
-                "highPrice", "lowPrice"]
-for col in numeric_cols:
-    if col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-cols_map = {
-    "symbol": "Пара",
-    "lastPrice": "Ціна (USDT)",
-    "priceChangePercent": "Зміна 24h (%)",
-    "volume": "Обсяг (базовий)",
-    "quoteVolume": "Обсяг (USDT)",
-    "highPrice": "Max 24h",
-    "lowPrice": "Min 24h",
-}
-df_display = df[[c for c in cols_map if c in df.columns]].rename(columns=cols_map)
-df_display = df_display.sort_values("Обсяг (USDT)", ascending=False).reset_index(drop=True)
-
-col1, col2, col3 = st.columns(3)
-col1.metric("Активних пар", len(df_display))
-col2.metric("Топ за обсягом", df_display["Пара"].iloc[0] if not df_display.empty else "—")
-
-total_volume = df_display["Обсяг (USDT)"].sum() if "Обсяг (USDT)" in df_display.columns else 0
-col3.metric("Загальний обсяг 24h (USDT)", f"${total_volume:,.0f}")
-
-st.divider()
-
-st.subheader("Топ-10 пар за обсягом (24h, USDT)")
-top10 = df_display.head(10)
-if not top10.empty:
-    fig = px.bar(
-        top10,
-        x="Пара",
-        y="Обсяг (USDT)",
-        color="Зміна 24h (%)",
-        color_continuous_scale="RdYlGn",
-        color_continuous_midpoint=0,
-        labels={"Обсяг (USDT)": "Обсяг, USDT"},
+@st.cache_data(ttl=30)
+def fetch_hyperliquid():
+    resp = requests.post(
+        HL_BASE,
+        headers={"Content-Type": "application/json"},
+        json={"type": "metaAndAssetCtxs"},
+        timeout=10,
     )
-    fig.update_layout(xaxis_tickangle=-45, height=420)
-    st.plotly_chart(fig, use_container_width=True)
+    resp.raise_for_status()
+    meta, ctxs = resp.json()
+    # meta["universe"] — список активів з назвами
+    # ctxs — список контекстів у тому ж порядку
+    rows = []
+    for asset, ctx in zip(meta["universe"], ctxs):
+        rows.append({
+            "Пара": asset["name"] + "/USDC",
+            "Ціна (USDC)": float(ctx.get("markPx") or 0),
+            "Обсяг 24h (USDC)": float(ctx.get("dayNtlVlm") or 0),
+            "Open Interest": float(ctx.get("openInterest") or 0),
+            "Funding Rate": float(ctx.get("funding") or 0),
+        })
+    df = pd.DataFrame(rows)
+    return df.sort_values("Обсяг 24h (USDC)", ascending=False).reset_index(drop=True)
 
-st.divider()
+@st.cache_data(ttl=30)
+def fetch_aster_df():
+    tickers = fetch_aster()
+    df = pd.DataFrame(tickers)
+    for col in ["lastPrice", "priceChangePercent", "quoteVolume", "highPrice", "lowPrice"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    cols_map = {
+        "symbol": "Пара",
+        "lastPrice": "Ціна (USDT)",
+        "priceChangePercent": "Зміна 24h (%)",
+        "quoteVolume": "Обсяг (USDT)",
+        "highPrice": "Max 24h",
+        "lowPrice": "Min 24h",
+    }
+    df = df[[c for c in cols_map if c in df.columns]].rename(columns=cols_map)
+    return df.sort_values("Обсяг (USDT)", ascending=False).reset_index(drop=True)
 
-st.subheader("Всі ринки")
-st.dataframe(df_display, use_container_width=True, hide_index=True)
+# --- UI ---
+
+st.title("Perp DEX — Live Market Data")
+
+tab_hl, tab_aster = st.tabs(["Hyperliquid", "Aster DEX"])
+
+# ---- TAB: Hyperliquid ----
+with tab_hl:
+    st.caption("Джерело: api.hyperliquid.xyz/info · оновлення кожні 30 сек")
+    with st.spinner("Завантаження Hyperliquid..."):
+        try:
+            df_hl = fetch_hyperliquid()
+        except Exception as e:
+            st.error(f"Помилка Hyperliquid API: {e}")
+            df_hl = pd.DataFrame()
+
+    if not df_hl.empty:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Активних пар", len(df_hl))
+        c2.metric("Топ за обсягом", df_hl["Пара"].iloc[0])
+        total_hl = df_hl["Обсяг 24h (USDC)"].sum()
+        c3.metric("Загальний обсяг 24h", f"${total_hl:,.0f}")
+
+        st.subheader("Топ-10 пар за обсягом (24h)")
+        top10 = df_hl.head(10)
+        fig = px.bar(
+            top10,
+            x="Пара",
+            y="Обсяг 24h (USDC)",
+            color="Funding Rate",
+            color_continuous_scale="RdYlGn",
+            color_continuous_midpoint=0,
+        )
+        fig.update_layout(xaxis_tickangle=-45, height=420)
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("Всі ринки")
+        st.dataframe(df_hl, use_container_width=True, hide_index=True)
+
+# ---- TAB: Aster DEX ----
+with tab_aster:
+    st.caption("Джерело: fapi.asterdex.com · оновлення кожні 30 сек")
+    with st.spinner("Завантаження Aster DEX..."):
+        try:
+            df_aster = fetch_aster_df()
+        except Exception as e:
+            st.error(f"Помилка Aster API: {e}")
+            df_aster = pd.DataFrame()
+
+    if not df_aster.empty:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Активних пар", len(df_aster))
+        c2.metric("Топ за обсягом", df_aster["Пара"].iloc[0])
+        total_aster = df_aster["Обсяг (USDT)"].sum()
+        c3.metric("Загальний обсяг 24h", f"${total_aster:,.0f}")
+
+        st.subheader("Топ-10 пар за обсягом (24h)")
+        top10 = df_aster.head(10)
+        fig = px.bar(
+            top10,
+            x="Пара",
+            y="Обсяг (USDT)",
+            color="Зміна 24h (%)",
+            color_continuous_scale="RdYlGn",
+            color_continuous_midpoint=0,
+        )
+        fig.update_layout(xaxis_tickangle=-45, height=420)
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("Всі ринки")
+        st.dataframe(df_aster, use_container_width=True, hide_index=True)
