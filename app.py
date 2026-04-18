@@ -165,9 +165,9 @@ with tab_overview:
         }),
         names="Exchange", values="Volume", color="Exchange",
         color_discrete_map={
-            "Hyperliquid": "#00C4FF",
-            "Aster DEX":   "#FF6B35",
-            "Lighter":     "#7B61FF",
+            "Hyperliquid": "#72D5C8",
+            "Aster DEX":   "#E8C99A",
+            "Lighter":     "#13141C",
         },
         hole=0.45,
     )
@@ -192,9 +192,9 @@ with tab_overview:
             pd.DataFrame(combined_rows),
             x="Pair", y="Volume 24h (USD)", color="Exchange", barmode="group",
             color_discrete_map={
-                "Hyperliquid": "#00C4FF",
-                "Aster DEX":   "#FF6B35",
-                "Lighter":     "#7B61FF",
+                "Hyperliquid": "#72D5C8",
+                "Aster DEX":   "#E8C99A",
+                "Lighter":     "#13141C",
             },
         )
         fig_grouped.update_layout(xaxis_tickangle=-45, height=450)
