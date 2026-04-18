@@ -5,8 +5,8 @@ import plotly.express as px
 
 st.set_page_config(page_title="Perp DEX Markets", layout="wide")
 
-ASTER_BASE  = "https://fapi.asterdex.com"
-HL_BASE     = "https://api.hyperliquid.xyz/info"
+ASTER_BASE   = "https://fapi.asterdex.com"
+HL_BASE      = "https://api.hyperliquid.xyz/info"
 LIGHTER_BASE = "https://mainnet.zklighter.elliot.ai"
 
 # ---------------------------------------------------------------------------
@@ -46,11 +46,11 @@ def fetch_hyperliquid_df():
     rows = []
     for asset, ctx in zip(meta["universe"], ctxs):
         rows.append({
-            "Pair":             asset["name"] + "/USDC",
-            "Price (USDC)":    float(ctx.get("markPx") or 0),
+            "Pair":              asset["name"] + "/USDC",
+            "Price (USDC)":     float(ctx.get("markPx") or 0),
             "Volume 24h (USD)": float(ctx.get("dayNtlVlm") or 0),
-            "Open Interest":   float(ctx.get("openInterest") or 0),
-            "Funding Rate":    float(ctx.get("funding") or 0),
+            "Open Interest":    float(ctx.get("openInterest") or 0),
+            "Funding Rate":     float(ctx.get("funding") or 0),
         })
     df = pd.DataFrame(rows)
     return df.sort_values("Volume 24h (USD)", ascending=False).reset_index(drop=True)
@@ -64,8 +64,8 @@ def fetch_lighter_df():
     rows = []
     for s in data.get("order_book_stats", []):
         rows.append({
-            "Pair":             s.get("symbol", "") + "/USD",
-            "Price":            float(s.get("last_trade_price") or 0),
+            "Pair":              s.get("symbol", "") + "/USD",
+            "Price":             float(s.get("last_trade_price") or 0),
             "Volume 24h (USD)": float(s.get("daily_quote_token_volume") or 0),
             "Change 24h (%)":   float(s.get("daily_price_change") or 0),
             "Trades 24h":       int(s.get("daily_trades_count") or 0),
@@ -75,23 +75,33 @@ def fetch_lighter_df():
 
 
 # ---------------------------------------------------------------------------
-# Column configs — числа залишаються float, Streamlit форматує як $1,234,567
+# Column configs
 # ---------------------------------------------------------------------------
 
-USD_FMT   = st.column_config.NumberColumn(format="$%d")         # обсяги — цілі
-PCT_FMT   = st.column_config.NumberColumn(format="%.2f%%")      # відсотки
-PRICE_FMT = st.column_config.NumberColumn(format="$%.4f")       # ціни — 4 знаки
+# $1,234,567 — з комами між групами
+USD_FMT   = st.column_config.NumberColumn(format="$%,.0f")
+PCT_FMT   = st.column_config.NumberColumn(format="%.2f%%")
+PRICE_FMT = st.column_config.NumberColumn(format="$%.4f")
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Стрипає суфікс котирувальної валюти:
+#   "BTC/USDC" → "BTC"
+#   "BTCUSDT"  → "BTC"  (Aster повертає без слешу)
+_QUOTE_SUFFIXES = ("USDT", "USDC", "USD", "BUSD", "PERP")
+
 def get_base_symbol(pair: str) -> str:
-    return pair.split("/")[0].upper()
+    s = pair.split("/")[0].upper()
+    for suffix in _QUOTE_SUFFIXES:
+        if s.endswith(suffix) and len(s) > len(suffix):
+            return s[: -len(suffix)]
+    return s
 
 
 def fmt_usd(val) -> str:
-    """Для st.metric — де потрібен рядок."""
+    """Для st.metric — рядок з комами."""
     try:
         return f"${int(round(float(val))):,}"
     except Exception:
@@ -195,10 +205,10 @@ with tab_overview:
     st.subheader("Cross-Exchange Comparison — Common Pairs")
     st.caption("Pairs traded simultaneously on multiple exchanges")
 
-    if not df_hl.empty and not df_aster.empty and not df_lighter.empty:
-        hl_syms      = {get_base_symbol(r["Pair"]): r["Volume 24h (USD)"] for _, r in df_hl.iterrows()}
-        aster_syms   = {get_base_symbol(r["Pair"]): r["Volume 24h (USD)"] for _, r in df_aster.iterrows()}
-        lighter_syms = {get_base_symbol(r["Pair"]): r["Volume 24h (USD)"] for _, r in df_lighter.iterrows()}
+    if not df_hl.empty or not df_aster.empty or not df_lighter.empty:
+        hl_syms      = {get_base_symbol(r["Pair"]): r["Volume 24h (USD)"] for _, r in df_hl.iterrows()}      if not df_hl.empty      else {}
+        aster_syms   = {get_base_symbol(r["Pair"]): r["Volume 24h (USD)"] for _, r in df_aster.iterrows()}   if not df_aster.empty   else {}
+        lighter_syms = {get_base_symbol(r["Pair"]): r["Volume 24h (USD)"] for _, r in df_lighter.iterrows()} if not df_lighter.empty else {}
 
         cross_rows = []
         for sym in sorted(set(hl_syms) | set(aster_syms) | set(lighter_syms)):
@@ -209,9 +219,9 @@ with tab_overview:
             if present >= 2:
                 cross_rows.append({
                     "Pair":              sym,
-                    "Hyperliquid (USD)": hl_v  if hl_v  is not None else None,
-                    "Aster DEX (USD)":   as_v  if as_v  is not None else None,
-                    "Lighter (USD)":     lt_v  if lt_v  is not None else None,
+                    "Hyperliquid (USD)": hl_v if hl_v is not None else None,
+                    "Aster DEX (USD)":   as_v if as_v is not None else None,
+                    "Lighter (USD)":     lt_v if lt_v is not None else None,
                     "Total Volume":      (hl_v or 0) + (as_v or 0) + (lt_v or 0),
                     "Exchanges":         present,
                 })
@@ -219,7 +229,7 @@ with tab_overview:
         if cross_rows:
             df_cross = (
                 pd.DataFrame(cross_rows)
-                .sort_values("Total Volume", ascending=False)  # числове сортування
+                .sort_values("Total Volume", ascending=False)
                 .reset_index(drop=True)
             )
             st.dataframe(
