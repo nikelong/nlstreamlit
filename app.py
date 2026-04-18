@@ -2,13 +2,25 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 
 st.set_page_config(page_title="Perp DEX Markets", layout="wide")
 
 ASTER_BASE = "https://fapi.asterdex.com"
 HL_BASE = "https://api.hyperliquid.xyz/info"
 LIGHTER_BASE = "https://mainnet.zklighter.elliot.ai"
+
+# --- Нормалізація назви пари до базового символу ---
+
+QUOTE_SUFFIXES = ["USDT", "USDC", "USD", "BUSD", "DAI"]
+
+def normalize_symbol(pair: str) -> str:
+    """BTC/USDC → BTC, BTCUSDT → BTC, BTC/USD → BTC"""
+    s = pair.upper().split("/")[0]  # прибрати /USDC, /USD тощо
+    for suffix in QUOTE_SUFFIXES:
+        if s.endswith(suffix) and len(s) > len(suffix):
+            s = s[: -len(suffix)]
+            break
+    return s
 
 # --- Функції отримання даних ---
 
@@ -29,6 +41,7 @@ def fetch_aster_df():
         "lowPrice": "Min 24h",
     }
     df = df[[c for c in cols_map if c in df.columns]].rename(columns=cols_map)
+    df["Символ"] = df["Пара"].apply(normalize_symbol)
     return df.sort_values("Обсяг (USDT)", ascending=False).reset_index(drop=True)
 
 @st.cache_data(ttl=30)
@@ -45,6 +58,7 @@ def fetch_hyperliquid_df():
     for asset, ctx in zip(meta["universe"], ctxs):
         rows.append({
             "Пара": asset["name"] + "/USDC",
+            "Символ": normalize_symbol(asset["name"]),
             "Ціна (USDC)": float(ctx.get("markPx") or 0),
             "Обсяг 24h (USDC)": float(ctx.get("dayNtlVlm") or 0),
             "Open Interest": float(ctx.get("openInterest") or 0),
@@ -57,11 +71,11 @@ def fetch_hyperliquid_df():
 def fetch_lighter_df():
     resp = requests.get(f"{LIGHTER_BASE}/api/v1/exchangeStats", timeout=10)
     resp.raise_for_status()
-    data = resp.json()
     rows = []
-    for s in data.get("order_book_stats", []):
+    for s in resp.json().get("order_book_stats", []):
         rows.append({
             "Пара": s.get("symbol", "") + "/USD",
+            "Символ": normalize_symbol(s.get("symbol", "")),
             "Ціна": float(s.get("last_trade_price") or 0),
             "Обсяг 24h (USD)": float(s.get("daily_quote_token_volume") or 0),
             "Зміна 24h (%)": float(s.get("daily_price_change") or 0),
@@ -69,12 +83,6 @@ def fetch_lighter_df():
         })
     df = pd.DataFrame(rows)
     return df.sort_values("Обсяг 24h (USD)", ascending=False).reset_index(drop=True)
-
-# --- Допоміжна функція для зведеного дашборду ---
-
-def get_base_symbol(pair: str) -> str:
-    """Витягнути базовий символ з назви пари (BTC/USDC → BTC)."""
-    return pair.split("/")[0].upper()
 
 # --- UI ---
 
@@ -109,36 +117,34 @@ with tab_overview:
     for err in errors:
         st.warning(f"Помилка API: {err}")
 
-    # --- Підсумкові метрики по біржах ---
-    vol_hl = df_hl["Обсяг 24h (USDC)"].sum() if not df_hl.empty else 0
-    vol_aster = df_aster["Обсяг (USDT)"].sum() if not df_aster.empty else 0
-    vol_lighter = df_lighter["Обсяг 24h (USD)"].sum() if not df_lighter.empty else 0
-    vol_total = vol_hl + vol_aster + vol_lighter
+    vol_hl     = df_hl["Обсяг 24h (USDC)"].sum() if not df_hl.empty else 0
+    vol_aster  = df_aster["Обсяг (USDT)"].sum()  if not df_aster.empty else 0
+    vol_lighter= df_lighter["Обсяг 24h (USD)"].sum() if not df_lighter.empty else 0
+    vol_total  = vol_hl + vol_aster + vol_lighter
 
+    # --- Метрики ---
     st.subheader("Загальний обсяг 24h")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Всього (3 біржі)", f"${vol_total:,.0f}")
-    c2.metric("Hyperliquid", f"${vol_hl:,.0f}")
-    c3.metric("Aster DEX", f"${vol_aster:,.0f}")
-    c4.metric("Lighter", f"${vol_lighter:,.0f}")
+    c2.metric("Hyperliquid",      f"${vol_hl:,.0f}")
+    c3.metric("Aster DEX",        f"${vol_aster:,.0f}")
+    c4.metric("Lighter",          f"${vol_lighter:,.0f}")
 
     st.divider()
 
-    # --- Кругова діаграма: частки ринку ---
+    # --- Кругова діаграма ---
     st.subheader("Частки ринку за обсягом 24h")
-    pie_data = {
-        "Біржа": ["Hyperliquid", "Aster DEX", "Lighter"],
-        "Обсяг": [vol_hl, vol_aster, vol_lighter],
-    }
     fig_pie = px.pie(
-        pd.DataFrame(pie_data),
-        names="Біржа",
-        values="Обсяг",
+        pd.DataFrame({
+            "Біржа":  ["Hyperliquid", "Aster DEX", "Lighter"],
+            "Обсяг":  [vol_hl, vol_aster, vol_lighter],
+        }),
+        names="Біржа", values="Обсяг",
         color="Біржа",
         color_discrete_map={
             "Hyperliquid": "#00C4FF",
-            "Aster DEX": "#FF6B35",
-            "Lighter": "#7B61FF",
+            "Aster DEX":   "#FF6B35",
+            "Lighter":     "#7B61FF",
         },
         hole=0.45,
     )
@@ -148,44 +154,28 @@ with tab_overview:
 
     st.divider()
 
-    # --- Топ-10 пар кожної біржі на одному груповому барчарті ---
+    # --- Груповий бар-чарт топ-10 ---
     st.subheader("Топ-10 пар за обсягом — по кожній біржі")
-
     combined_rows = []
     if not df_hl.empty:
-        for _, row in df_hl.head(10).iterrows():
-            combined_rows.append({
-                "Біржа": "Hyperliquid",
-                "Пара": get_base_symbol(row["Пара"]),
-                "Обсяг 24h (USD)": row["Обсяг 24h (USDC)"],
-            })
+        for _, r in df_hl.head(10).iterrows():
+            combined_rows.append({"Біржа": "Hyperliquid", "Пара": r["Символ"], "Обсяг 24h (USD)": r["Обсяг 24h (USDC)"]})
     if not df_aster.empty:
-        for _, row in df_aster.head(10).iterrows():
-            combined_rows.append({
-                "Біржа": "Aster DEX",
-                "Пара": get_base_symbol(row["Пара"]),
-                "Обсяг 24h (USD)": row["Обсяг (USDT)"],
-            })
+        for _, r in df_aster.head(10).iterrows():
+            combined_rows.append({"Біржа": "Aster DEX",   "Пара": r["Символ"], "Обсяг 24h (USD)": r["Обсяг (USDT)"]})
     if not df_lighter.empty:
-        for _, row in df_lighter.head(10).iterrows():
-            combined_rows.append({
-                "Біржа": "Lighter",
-                "Пара": get_base_symbol(row["Пара"]),
-                "Обсяг 24h (USD)": row["Обсяг 24h (USD)"],
-            })
+        for _, r in df_lighter.head(10).iterrows():
+            combined_rows.append({"Біржа": "Lighter",     "Пара": r["Символ"], "Обсяг 24h (USD)": r["Обсяг 24h (USD)"]})
 
     if combined_rows:
-        df_combined = pd.DataFrame(combined_rows)
         fig_grouped = px.bar(
-            df_combined,
-            x="Пара",
-            y="Обсяг 24h (USD)",
-            color="Біржа",
+            pd.DataFrame(combined_rows),
+            x="Пара", y="Обсяг 24h (USD)", color="Біржа",
             barmode="group",
             color_discrete_map={
                 "Hyperliquid": "#00C4FF",
-                "Aster DEX": "#FF6B35",
-                "Lighter": "#7B61FF",
+                "Aster DEX":   "#FF6B35",
+                "Lighter":     "#7B61FF",
             },
         )
         fig_grouped.update_layout(xaxis_tickangle=-45, height=450)
@@ -193,37 +183,40 @@ with tab_overview:
 
     st.divider()
 
-    # --- Крос-біржова таблиця: спільні пари ---
+    # --- Крос-біржова таблиця зі зведеним обсягом ---
     st.subheader("Крос-біржове порівняння — спільні пари")
     st.caption("Пари, що торгуються одночасно на кількох біржах")
 
     if not df_hl.empty and not df_aster.empty and not df_lighter.empty:
-        hl_syms = {get_base_symbol(r["Пара"]): r["Обсяг 24h (USDC)"]
-                   for _, r in df_hl.iterrows()}
-        aster_syms = {get_base_symbol(r["Пара"]): r["Обсяг (USDT)"]
-                      for _, r in df_aster.iterrows()}
-        lighter_syms = {get_base_symbol(r["Пара"]): r["Обсяг 24h (USD)"]
-                        for _, r in df_lighter.iterrows()}
+        # Словники: символ → обсяг
+        hl_map     = df_hl.set_index("Символ")["Обсяг 24h (USDC)"].to_dict()
+        aster_map  = df_aster.set_index("Символ")["Обсяг (USDT)"].to_dict()
+        lighter_map= df_lighter.set_index("Символ")["Обсяг 24h (USD)"].to_dict()
 
-        all_syms = sorted(set(hl_syms) | set(aster_syms) | set(lighter_syms))
+        all_syms = sorted(set(hl_map) | set(aster_map) | set(lighter_map))
         cross_rows = []
         for sym in all_syms:
-            hl_v = hl_syms.get(sym)
-            as_v = aster_syms.get(sym)
-            lt_v = lighter_syms.get(sym)
-            # показуємо лише ті, що є мінімум на двох біржах
+            hl_v  = hl_map.get(sym)
+            as_v  = aster_map.get(sym)
+            lt_v  = lighter_map.get(sym)
             present = sum([hl_v is not None, as_v is not None, lt_v is not None])
             if present >= 2:
+                total_v = (hl_v or 0) + (as_v or 0) + (lt_v or 0)
                 cross_rows.append({
-                    "Пара": sym,
-                    "Hyperliquid": f"${hl_v:,.0f}" if hl_v else "—",
-                    "Aster DEX": f"${as_v:,.0f}" if as_v else "—",
-                    "Lighter": f"${lt_v:,.0f}" if lt_v else "—",
-                    "Бірж": present,
+                    "Пара":              sym,
+                    "Hyperliquid":       f"${hl_v:,.0f}"   if hl_v  else "—",
+                    "Aster DEX":         f"${as_v:,.0f}"   if as_v  else "—",
+                    "Lighter":           f"${lt_v:,.0f}"   if lt_v  else "—",
+                    "Зведений обсяг":    f"${total_v:,.0f}",
+                    "Бірж":              present,
                 })
 
         if cross_rows:
-            df_cross = pd.DataFrame(cross_rows).sort_values("Бірж", ascending=False)
+            df_cross = (
+                pd.DataFrame(cross_rows)
+                .sort_values("Бірж", ascending=False)
+                .reset_index(drop=True)
+            )
             st.dataframe(df_cross, use_container_width=True, hide_index=True)
         else:
             st.info("Спільних пар не знайдено.")
@@ -237,24 +230,19 @@ with tab_hl:
         except Exception as e:
             st.error(f"Помилка Hyperliquid API: {e}")
             df_hl = pd.DataFrame()
-
     if not df_hl.empty:
         c1, c2, c3 = st.columns(3)
         c1.metric("Активних пар", len(df_hl))
         c2.metric("Топ за обсягом", df_hl["Пара"].iloc[0])
         c3.metric("Загальний обсяг 24h", f"${df_hl['Обсяг 24h (USDC)'].sum():,.0f}")
-
         st.subheader("Топ-10 пар за обсягом (24h)")
-        fig = px.bar(
-            df_hl.head(10), x="Пара", y="Обсяг 24h (USDC)",
-            color="Funding Rate", color_continuous_scale="RdYlGn",
-            color_continuous_midpoint=0,
-        )
+        fig = px.bar(df_hl.head(10), x="Пара", y="Обсяг 24h (USDC)",
+                     color="Funding Rate", color_continuous_scale="RdYlGn",
+                     color_continuous_midpoint=0)
         fig.update_layout(xaxis_tickangle=-45, height=420)
         st.plotly_chart(fig, use_container_width=True)
-
         st.subheader("Всі ринки")
-        st.dataframe(df_hl, use_container_width=True, hide_index=True)
+        st.dataframe(df_hl.drop(columns=["Символ"]), use_container_width=True, hide_index=True)
 
 # ---- TAB: Aster DEX ----
 with tab_aster:
@@ -265,24 +253,19 @@ with tab_aster:
         except Exception as e:
             st.error(f"Помилка Aster API: {e}")
             df_aster = pd.DataFrame()
-
     if not df_aster.empty:
         c1, c2, c3 = st.columns(3)
         c1.metric("Активних пар", len(df_aster))
         c2.metric("Топ за обсягом", df_aster["Пара"].iloc[0])
         c3.metric("Загальний обсяг 24h", f"${df_aster['Обсяг (USDT)'].sum():,.0f}")
-
         st.subheader("Топ-10 пар за обсягом (24h)")
-        fig = px.bar(
-            df_aster.head(10), x="Пара", y="Обсяг (USDT)",
-            color="Зміна 24h (%)", color_continuous_scale="RdYlGn",
-            color_continuous_midpoint=0,
-        )
+        fig = px.bar(df_aster.head(10), x="Пара", y="Обсяг (USDT)",
+                     color="Зміна 24h (%)", color_continuous_scale="RdYlGn",
+                     color_continuous_midpoint=0)
         fig.update_layout(xaxis_tickangle=-45, height=420)
         st.plotly_chart(fig, use_container_width=True)
-
         st.subheader("Всі ринки")
-        st.dataframe(df_aster, use_container_width=True, hide_index=True)
+        st.dataframe(df_aster.drop(columns=["Символ"]), use_container_width=True, hide_index=True)
 
 # ---- TAB: Lighter ----
 with tab_lighter:
@@ -293,21 +276,16 @@ with tab_lighter:
         except Exception as e:
             st.error(f"Помилка Lighter API: {e}")
             df_lighter = pd.DataFrame()
-
     if not df_lighter.empty:
         c1, c2, c3 = st.columns(3)
         c1.metric("Активних пар", len(df_lighter))
         c2.metric("Топ за обсягом", df_lighter["Пара"].iloc[0])
         c3.metric("Загальний обсяг 24h", f"${df_lighter['Обсяг 24h (USD)'].sum():,.0f}")
-
         st.subheader("Топ-10 пар за обсягом (24h)")
-        fig = px.bar(
-            df_lighter.head(10), x="Пара", y="Обсяг 24h (USD)",
-            color="Зміна 24h (%)", color_continuous_scale="RdYlGn",
-            color_continuous_midpoint=0,
-        )
+        fig = px.bar(df_lighter.head(10), x="Пара", y="Обсяг 24h (USD)",
+                     color="Зміна 24h (%)", color_continuous_scale="RdYlGn",
+                     color_continuous_midpoint=0)
         fig.update_layout(xaxis_tickangle=-45, height=420)
         st.plotly_chart(fig, use_container_width=True)
-
         st.subheader("Всі ринки")
-        st.dataframe(df_lighter, use_container_width=True, hide_index=True)
+        st.dataframe(df_lighter.drop(columns=["Символ"]), use_container_width=True, hide_index=True)
