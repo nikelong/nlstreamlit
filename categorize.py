@@ -420,6 +420,22 @@ USER_OVERRIDES: dict[str, tuple[str, str]] = {
 
     # HIP-3 Crypto (Ventuals тощо)
     "ROBOT":       ("Crypto", "Robot (Ventuals)"),
+
+    # === Крок 3.5: Indices (HIP-3 Paragon para: dex + Extended minis) ===
+    "TOTAL2":      ("Indices", "Total Crypto Market Cap (excl. BTC)"),
+    "OTHERS":      ("Indices", "Others Altcoin Market Cap"),
+    "BTCD":        ("Indices", "Bitcoin Dominance Index"),
+    "RCOMP":       ("Indices", "Russell 3000 Composite"),
+    "R200":        ("Indices", "Russell 2000"),
+
+    # === Крок 3.5: Crypto — symbol mismatch з CoinGecko (на біржі інший символ) ===
+    "AVAAI":       ("Crypto", "Ava AI"),
+    "NEIROETH":    ("Crypto", "Neiro on Ethereum"),
+
+    # === Крок 3.5: Crypto — unidentified / дрібні токени без надійних джерел ===
+    "AITO":        ("Crypto", "AITO"),
+    "ERNEL":       ("Crypto", "ERNEL"),
+    "ITE":         ("Crypto", "ITE"),
 }
 
 # Нормалізуємо ключі в USER_OVERRIDES до upper case
@@ -541,6 +557,10 @@ def apply(
 def print_unknowns(df: pd.DataFrame, exchange_name: str = "", top_n: int = 30) -> None:
     """
     Друкує топ-N canonical bases без Asset Name (потребують ручної класифікації).
+
+    Якщо top_n < 0 — друкує всі unknowns без ліміту (діагностичний режим).
+    Якщо у DataFrame є колонка 'Exchange' — додатково показує, на яких біржах
+    кожен canonical base зустрічається (для manual audit).
     """
     if df.empty or "Asset Name" not in df.columns:
         return
@@ -550,6 +570,8 @@ def print_unknowns(df: pd.DataFrame, exchange_name: str = "", top_n: int = 30) -
         return
 
     vol_col = "Volume 24h (USD)" if "Volume 24h (USD)" in df.columns else None
+    has_exchange = "Exchange" in df.columns
+
     if vol_col:
         grouped = unknown.groupby("Canonical Base")[vol_col].sum().sort_values(ascending=False)
     else:
@@ -558,11 +580,20 @@ def print_unknowns(df: pd.DataFrame, exchange_name: str = "", top_n: int = 30) -
     if grouped.empty:
         return
 
+    # Мапа canonical → список бірж (для контексту)
+    exchange_map = {}
+    if has_exchange:
+        exchange_map = unknown.groupby("Canonical Base")["Exchange"].apply(
+            lambda s: ", ".join(sorted(set(s)))
+        ).to_dict()
+
+    limit = len(grouped) if top_n < 0 else top_n
     prefix = f"[{exchange_name}] " if exchange_name else ""
-    print(f"   🔍 {prefix}Без Asset Name: {len(unknown)} pairs (top {min(top_n, len(grouped))}):")
-    for canon, vol in grouped.head(top_n).items():
+    print(f"   🔍 {prefix}Без Asset Name: {len(unknown)} pairs (top {min(limit, len(grouped))}):")
+    for canon, vol in grouped.head(limit).items():
+        exch_suffix = f" [{exchange_map[canon]}]" if canon in exchange_map else ""
         if vol_col:
-            print(f"      • {canon:20s} ${vol:>15,.0f}")
+            print(f"      • {canon:20s} ${vol:>15,.0f}{exch_suffix}")
         else:
             print(f"      • {canon:20s} (count: {vol})")
 
