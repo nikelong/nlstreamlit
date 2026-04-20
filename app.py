@@ -5,7 +5,16 @@ import plotly.express as px
 st.set_page_config(page_title="Perp DEX Markets", layout="wide")
 
 # ---------------------------------------------------------------------------
-# Конфіг бірж — централізовано, додавання нової = +1 рядок
+# Конфіг 10 бірж — централізовано. Додавання нової = +1 словник.
+# Поля:
+#   parquet      — шлях до parquet-файлу
+#   source_*     — посилання на API
+#   trade_*      — посилання на сам додаток біржі
+#   color        — колір біржі для графіків (узгоджений з її брендом)
+#   price_col    — назва колонки з ціною (різна між біржами)
+#   color_col    — колонка для розфарбовування bar chart
+#   color_format — формат для color колонки в dataframe (None = за замовчуванням)
+#   logo_url     — URL логотипу з CoinGecko CDN
 # ---------------------------------------------------------------------------
 
 EXCHANGES = {
@@ -45,10 +54,94 @@ EXCHANGES = {
         "color_format": None,
         "logo_url":     "https://coin-images.coingecko.com/markets/images/22097/small/lighter.jpg?1758003181",
     },
+    "Paradex": {
+        "parquet":      "data/paradex_cache.parquet",
+        "source_label": "api.prod.paradex.trade",
+        "source_url":   "https://api.prod.paradex.trade",
+        "trade_label":  "Open Paradex",
+        "trade_url":    "https://app.paradex.trade",
+        "color":        "#9B59B6",
+        "price_col":    "Price (USDC)",
+        "color_col":    "Change 24h (%)",
+        "color_format": None,
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/1310/small/paradex.jpg?1772694430",
+    },
+    "Variational Omni": {
+        "parquet":      "data/variational_cache.parquet",
+        "source_label": "omni-client-api.prod.ap-northeast-1.variational.io",
+        "source_url":   "https://omni-client-api.prod.ap-northeast-1.variational.io",
+        "trade_label":  "Open Variational",
+        "trade_url":    "https://omni.variational.io",
+        "color":        "#3498DB",
+        "price_col":    "Price (USDC)",
+        "color_col":    "Funding Rate",
+        "color_format": "%.6f",
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/22231/small/Variational_Blue_Space-Blue-Mark-Space-Blue-Background.png?1773646635",
+    },
+    "Extended": {
+        "parquet":      "data/extended_cache.parquet",
+        "source_label": "api.starknet.extended.exchange",
+        "source_url":   "https://api.starknet.extended.exchange",
+        "trade_label":  "Open Extended",
+        "trade_url":    "https://extended.exchange",
+        "color":        "#E74C3C",
+        "price_col":    "Price (USD)",
+        "color_col":    "Change 24h (%)",
+        "color_format": None,
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/22114/small/extended.png?1759117306",
+    },
+    "Pacifica": {
+        "parquet":      "data/pacifica_cache.parquet",
+        "source_label": "api.pacifica.fi",
+        "source_url":   "https://api.pacifica.fi",
+        "trade_label":  "Open Pacifica",
+        "trade_url":    "https://app.pacifica.fi",
+        "color":        "#1ABC9C",
+        "price_col":    "Price (USD)",
+        "color_col":    "Change 24h (%)",
+        "color_format": None,
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/22171/small/Cyan_Logo_Dark_Background_%281%29.png?1764569549",
+    },
+    "GRVT": {
+        "parquet":      "data/grvt_cache.parquet",
+        "source_label": "market-data.grvt.io",
+        "source_url":   "https://market-data.grvt.io",
+        "trade_label":  "Open GRVT",
+        "trade_url":    "https://grvt.io",
+        "color":        "#F39C12",
+        "price_col":    "Price (USDT)",
+        "color_col":    "Change 24h (%)",
+        "color_format": None,
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/11862/small/grvt.jpg?1768789669",
+    },
+    "EdgeX": {
+        "parquet":      "data/edgex_cache.parquet",
+        "source_label": "pro.edgex.exchange",
+        "source_url":   "https://pro.edgex.exchange",
+        "trade_label":  "Open EdgeX",
+        "trade_url":    "https://pro.edgex.exchange",
+        "color":        "#34495E",
+        "price_col":    "Price (USD)",
+        "color_col":    "Change 24h (%)",
+        "color_format": None,
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/11726/small/Square.png?1775697036",
+    },
+    "ApeX Omni": {
+        "parquet":      "data/apex_cache.parquet",
+        "source_label": "omni.apex.exchange",
+        "source_url":   "https://omni.apex.exchange",
+        "trade_label":  "Open ApeX Omni",
+        "trade_url":    "https://omni.apex.exchange",
+        "color":        "#E67E22",
+        "price_col":    "Price (USDT)",
+        "color_col":    "Change 24h (%)",
+        "color_format": None,
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/1669/small/100*100.PNG?1721201012",
+    },
 }
 
 # ---------------------------------------------------------------------------
-# Завантаження даних
+# Завантаження даних — універсальний loader для будь-якої біржі
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=900)
@@ -73,7 +166,8 @@ PRICE_FMT = st.column_config.NumberColumn(format="$%.4f")
 _QUOTE_SUFFIXES = ("USDT", "USDC", "USD", "BUSD", "PERP")
 
 def get_base_symbol(pair: str) -> str:
-    s = pair.split("/")[0].upper()
+    """Витягує базовий символ з пари: 'BTC-USD-PERP' → 'BTC', 'ETHUSDT' → 'ETH'."""
+    s = pair.split("/")[0].split("-")[0].upper()
     for suffix in _QUOTE_SUFFIXES:
         if s.endswith(suffix) and len(s) > len(suffix):
             return s[: -len(suffix)]
@@ -91,21 +185,17 @@ def fmt_usd(val) -> str:
 
 st.sidebar.title("Perp DEX")
 
-# Callback кнопки Overview: скидає вибір біржі
 def _go_to_overview():
     st.session_state.nav_exchange = None
 
-# Кнопка Overview — клікабельна дія, не toggle
 st.sidebar.button(
     "📊 Overview",
     on_click=_go_to_overview,
     use_container_width=True,
 )
 
-# Заголовок секції
 st.sidebar.markdown("### 🏛 Exchanges")
 
-# Radio для бірж — index=None, нічого не обрано на старті
 selected_exchange = st.sidebar.radio(
     label="exchanges",
     options=list(EXCHANGES.keys()),
@@ -117,17 +207,13 @@ selected_exchange = st.sidebar.radio(
 st.sidebar.divider()
 st.sidebar.markdown("### ℹ️ Про дашборд")
 st.sidebar.markdown(
-    "Cross-exchange аналітика perpetual DEX. "
+    "Cross-exchange аналітика 10 perpetual DEX. "
     "Дані оновлюються через GitHub Actions."
 )
 
-# ---------------------------------------------------------------------------
-# Main content — Overview якщо біржа не обрана, інакше детально по біржі
-# ---------------------------------------------------------------------------
-
-# ============================================================================
-# Розділ: OVERVIEW (за замовчуванням)
-# ============================================================================
+# ===========================================================================
+# OVERVIEW (за замовчуванням, якщо біржа не обрана)
+# ===========================================================================
 
 if selected_exchange is None:
     st.title("Perp DEX — Market Data")
@@ -146,14 +232,21 @@ if selected_exchange is None:
                for name, df in dfs.items()}
     vol_total = sum(volumes.values())
 
+    # Total volumes — total одним великим metric, інші — нижче в сітці
     st.subheader("Total Volume 24h")
-    cols = st.columns(len(EXCHANGES) + 1)
-    cols[0].metric(f"All {len(EXCHANGES)} exchanges", fmt_usd(vol_total))
-    for i, (name, vol) in enumerate(volumes.items(), start=1):
-        cols[i].metric(name, fmt_usd(vol))
+    st.metric(f"All {len(EXCHANGES)} exchanges", fmt_usd(vol_total))
+
+    # Сітка 5×2 з біржами (10 бірж = 2 ряди по 5)
+    items = list(volumes.items())
+    for row_start in range(0, len(items), 5):
+        row_items = items[row_start:row_start + 5]
+        cols = st.columns(5)
+        for i, (name, vol) in enumerate(row_items):
+            cols[i].metric(name, fmt_usd(vol))
 
     st.divider()
 
+    # Pie: market share
     st.subheader("Market Share by Volume 24h")
     pie_df = pd.DataFrame({
         "Exchange": list(volumes.keys()),
@@ -165,11 +258,12 @@ if selected_exchange is None:
         color_discrete_map=color_map, hole=0.45,
     )
     fig_pie.update_traces(textinfo="percent+label")
-    fig_pie.update_layout(height=380, showlegend=False)
+    fig_pie.update_layout(height=450)
     st.plotly_chart(fig_pie, use_container_width=True)
 
     st.divider()
 
+    # Top 10 pairs per exchange
     st.subheader("Top 10 Pairs by Volume — per Exchange")
     combined_rows = []
     for name, df in dfs.items():
@@ -186,13 +280,14 @@ if selected_exchange is None:
             x="Pair", y="Volume 24h (USD)", color="Exchange", barmode="group",
             color_discrete_map=color_map,
         )
-        fig_grouped.update_layout(xaxis_tickangle=-45, height=450)
+        fig_grouped.update_layout(xaxis_tickangle=-45, height=500)
         st.plotly_chart(fig_grouped, use_container_width=True)
 
     st.divider()
 
+    # Cross-exchange common pairs (де торгується ≥3 біржах)
     st.subheader("Cross-Exchange Comparison — Common Pairs")
-    st.caption("Pairs traded simultaneously on multiple exchanges")
+    st.caption("Пари, що торгуються одночасно на ≥3 біржах")
 
     syms_per_exchange = {
         name: {get_base_symbol(r["Pair"]): r["Volume 24h (USD)"]
@@ -210,27 +305,34 @@ if selected_exchange is None:
         total_vol = 0
         for name, syms in syms_per_exchange.items():
             v = syms.get(sym)
-            row[f"{name} (USD)"] = v
+            row[f"{name}"] = v
             if v is not None:
                 present_count += 1
                 total_vol += v
-        if present_count >= 2:
+        # ≥3 бірж — щоб не показувати нудний топ з BTC скрізь
+        if present_count >= 3:
             row["Total Volume"] = total_vol
+            row["Exchanges"]    = present_count
             cross_rows.append(row)
 
     if cross_rows:
-        col_config = {f"{name} (USD)": USD_FMT for name in EXCHANGES}
+        col_config = {f"{name}": USD_FMT for name in EXCHANGES}
         col_config["Total Volume"] = USD_FMT
+        col_config["Exchanges"]    = st.column_config.NumberColumn(format="%d")
+        cross_df = pd.DataFrame(cross_rows).sort_values("Total Volume", ascending=False).reset_index(drop=True)
+        # Reorder: Pair, Exchanges, Total Volume, потім біржі
+        col_order = ["Pair", "Exchanges", "Total Volume"] + list(EXCHANGES.keys())
+        cross_df = cross_df[[c for c in col_order if c in cross_df.columns]]
         st.dataframe(
-            pd.DataFrame(cross_rows).sort_values("Total Volume", ascending=False).reset_index(drop=True),
-            use_container_width=True, hide_index=True, column_config=col_config,
+            cross_df, use_container_width=True, hide_index=True,
+            column_config=col_config,
         )
     else:
-        st.info("No common pairs found.")
+        st.info("No common pairs found across ≥3 exchanges.")
 
-# ============================================================================
-# Розділ: EXCHANGE DETAIL
-# ============================================================================
+# ===========================================================================
+# EXCHANGE DETAIL
+# ===========================================================================
 
 else:
     cfg = EXCHANGES[selected_exchange]
