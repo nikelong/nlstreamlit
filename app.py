@@ -5,7 +5,7 @@ import plotly.express as px
 st.set_page_config(page_title="Perp DEX Markets", layout="wide")
 
 # ---------------------------------------------------------------------------
-# Конфіг бірж — все централізовано тут, додавання нової = +1 рядок
+# Конфіг бірж — централізовано, додавання нової = +1 рядок
 # ---------------------------------------------------------------------------
 
 EXCHANGES = {
@@ -47,12 +47,11 @@ EXCHANGES = {
 OVERVIEW_KEY = "📊 Overview"
 
 # ---------------------------------------------------------------------------
-# Завантаження даних — універсальний loader для будь-якої біржі
+# Завантаження даних
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=900)
 def load_exchange(name: str) -> pd.DataFrame:
-    """Читає parquet для біржі. Повертає порожній DataFrame, якщо файл не знайдено."""
     try:
         return pd.read_parquet(EXCHANGES[name]["parquet"])
     except Exception:
@@ -86,50 +85,22 @@ def fmt_usd(val) -> str:
         return "—"
 
 # ---------------------------------------------------------------------------
-# Sidebar — головний навігатор: Overview + список бірж в одному radio
+# Sidebar — один radio: Overview + усі біржі в спільному списку
+# Розділення секцій робиться через captions (вони не клікабельні)
 # ---------------------------------------------------------------------------
 
 st.sidebar.title("Perp DEX")
 
-# Ініціалізація стану перед callback-ами
-if "active_section" not in st.session_state:
-    st.session_state.active_section = "overview"
+# Опції — Overview перший пункт, потім біржі
+nav_options = [OVERVIEW_KEY] + list(EXCHANGES.keys())
 
-# Callback-и для миттєвого переключення активної секції при кліку
-def _on_overview_click():
-    st.session_state.active_section = "overview"
-
-def _on_exchange_click():
-    st.session_state.active_section = "exchange"
-
-# Секція 1: Overview
-overview_label = "📊 Overview"
-if st.session_state.active_section == "overview":
-    overview_label = f"**▸ {overview_label}**"
-st.sidebar.markdown(f"### {overview_label}")
-
-st.sidebar.radio(
-    label="overview-nav",
-    options=[OVERVIEW_KEY],
+# Captions перед кожним пунктом: робимо їх для секцій
+# (Streamlit не дає вбудованих "груп" в radio, тому спершу секція 1 — Overview один,
+# потім візуальний роздільник, потім "Exchanges" з рештою)
+selected = st.sidebar.radio(
+    label="Навігація",
+    options=nav_options,
     label_visibility="collapsed",
-    key="nav_overview",
-    on_change=_on_overview_click,
-)
-
-st.sidebar.divider()
-
-# Секція 2: Exchanges
-exchanges_label = "🏛 Exchanges"
-if st.session_state.active_section == "exchange":
-    exchanges_label = f"**▸ {exchanges_label}**"
-st.sidebar.markdown(f"### {exchanges_label}")
-
-exchange_selected = st.sidebar.radio(
-    label="exchange-nav",
-    options=list(EXCHANGES.keys()),
-    label_visibility="collapsed",
-    key="nav_exchange",
-    on_change=_on_exchange_click,
 )
 
 st.sidebar.divider()
@@ -140,7 +111,7 @@ st.sidebar.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# Main content — рендеримо обраний розділ
+# Main content
 # ---------------------------------------------------------------------------
 
 st.title("Perp DEX — Market Data")
@@ -149,10 +120,9 @@ st.title("Perp DEX — Market Data")
 # Розділ: OVERVIEW
 # ============================================================================
 
-if st.session_state.active_section == "overview":
+if selected == OVERVIEW_KEY:
     st.caption("Cross-exchange analytics · дані з локального кешу")
 
-    # Завантажити всі біржі
     dfs = {name: load_exchange(name) for name in EXCHANGES}
 
     errors = [name for name, df in dfs.items() if df.empty]
@@ -162,7 +132,7 @@ if st.session_state.active_section == "overview":
             f"Запустіть fetch через GitHub Actions."
         )
 
-    # Total volumes per exchange
+    # Total volumes
     volumes = {name: df["Volume 24h (USD)"].sum() if not df.empty else 0
                for name, df in dfs.items()}
     vol_total = sum(volumes.values())
@@ -175,7 +145,7 @@ if st.session_state.active_section == "overview":
 
     st.divider()
 
-    # Pie: market share
+    # Pie
     st.subheader("Market Share by Volume 24h")
     pie_df = pd.DataFrame({
         "Exchange": list(volumes.keys()),
@@ -192,7 +162,7 @@ if st.session_state.active_section == "overview":
 
     st.divider()
 
-    # Top 10 pairs per exchange (grouped bar)
+    # Top 10 grouped bar
     st.subheader("Top 10 Pairs by Volume — per Exchange")
     combined_rows = []
     for name, df in dfs.items():
@@ -253,15 +223,15 @@ if st.session_state.active_section == "overview":
         st.info("No common pairs found.")
 
 # ============================================================================
-# Розділ: EXCHANGE DETAIL (вибрана біржа з sidebar)
+# Розділ: EXCHANGE DETAIL
 # ============================================================================
 
 else:
-    cfg = EXCHANGES[exchange_selected]
-    df = load_exchange(exchange_selected)
+    cfg = EXCHANGES[selected]
+    df = load_exchange(selected)
 
     st.markdown(
-        f"### {exchange_selected}\n\n"
+        f"### {selected}\n\n"
         f"Source: [{cfg['source_label']}]({cfg['source_url']}) · "
         f"🔗 [{cfg['trade_label']}]({cfg['trade_url']})"
     )
@@ -272,13 +242,11 @@ else:
             f"Запустіть fetch через GitHub Actions."
         )
     else:
-        # 3 metrics
         c1, c2, c3 = st.columns(3)
         c1.metric("Active pairs",      len(df))
         c2.metric("Top pair",          df["Pair"].iloc[0])
         c3.metric("Total volume 24h",  fmt_usd(df["Volume 24h (USD)"].sum()))
 
-        # Bar chart top 10
         bar_kwargs = dict(
             x="Pair", y="Volume 24h (USD)",
             color=cfg["color_col"], color_continuous_scale="RdYlGn",
@@ -288,7 +256,6 @@ else:
         fig.update_layout(xaxis_tickangle=-45, height=420)
         st.plotly_chart(fig, use_container_width=True)
 
-        # Dataframe з усіма парами
         col_config = {
             cfg["price_col"]:    PRICE_FMT,
             "Volume 24h (USD)":  USD_FMT,
