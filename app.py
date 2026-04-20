@@ -536,6 +536,98 @@ elif st.session_state.page == "categories":
                 )
             ]
 
+        # ---- #4 TradFi-share per exchange (stacked horizontal bar) ----
+        st.subheader("TradFi vs Crypto — share per exchange")
+        st.caption("TradFi = Stocks + Commodities + Indices + FX combined")
+
+        all_combined["AssetClass"] = all_combined["Category"].apply(
+            lambda c: "Crypto" if c == "Crypto" else "TradFi"
+        )
+        share_df = (
+            all_combined.groupby(["Exchange", "AssetClass"])["Volume 24h (USD)"]
+            .sum()
+            .reset_index()
+        )
+        # Впорядковуємо exchange'і за загальним volume (найбільша зверху)
+        exch_totals = share_df.groupby("Exchange")["Volume 24h (USD)"].sum().sort_values(ascending=True)
+        share_df["Exchange"] = pd.Categorical(
+            share_df["Exchange"], categories=exch_totals.index.tolist(), ordered=True
+        )
+
+        fig_share = px.bar(
+            share_df.sort_values("Exchange"),
+            x="Volume 24h (USD)", y="Exchange",
+            color="AssetClass",
+            color_discrete_map={"Crypto": CATEGORY_COLORS["Crypto"], "TradFi": "#92400E"},
+            orientation="h",
+            barmode="stack",
+            hover_data={"Volume 24h (USD)": ":,.0f"},
+        )
+        fig_share.update_layout(
+            height=400, xaxis_title="24h Volume (USD)", yaxis_title=None,
+            legend_title_text="", margin=dict(l=10, r=10, t=10, b=10),
+        )
+        st.plotly_chart(fig_share, use_container_width=True)
+
+        # Короткий summary під bar — хто найбільш диверсифікований
+        summary = (
+            share_df.pivot(index="Exchange", columns="AssetClass", values="Volume 24h (USD)")
+            .fillna(0)
+            .assign(
+                Total=lambda d: d.sum(axis=1),
+                TradFi_pct=lambda d: d.get("TradFi", 0) / d.sum(axis=1) * 100,
+            )
+            .sort_values("TradFi_pct", ascending=False)
+        )
+        top_tradfi = summary.head(3).reset_index()
+        top_tradfi_list = [
+            f"**{row['Exchange']}** ({row['TradFi_pct']:.1f}%)"
+            for _, row in top_tradfi.iterrows()
+        ]
+        st.caption(f"Most diversified into TradFi: {' · '.join(top_tradfi_list)}")
+
+        st.divider()
+
+        # ---- #5 Treemap: Category → Exchange → Volume ----
+        st.subheader("Volume landscape — Category × Exchange")
+        st.caption("Size of each block is proportional to 24h volume")
+
+        tree_df = (
+            all_combined.groupby(["Category", "Exchange"])["Volume 24h (USD)"]
+            .sum()
+            .reset_index()
+        )
+        tree_df = tree_df[tree_df["Volume 24h (USD)"] > 0]
+        # Додаємо emoji-префікси у назви категорій для читабельності treemap labels
+        tree_df["Category"] = tree_df["Category"].apply(
+            lambda c: f"{CATEGORY_EMOJI.get(c, '')} {c}"
+        )
+
+        # Map кольорів з префіксом
+        tree_color_map = {
+            f"{CATEGORY_EMOJI[cat]} {cat}": color
+            for cat, color in CATEGORY_COLORS.items()
+        }
+
+        fig_tree = px.treemap(
+            tree_df,
+            path=["Category", "Exchange"],
+            values="Volume 24h (USD)",
+            color="Category",
+            color_discrete_map=tree_color_map,
+            hover_data={"Volume 24h (USD)": ":,.0f"},
+        )
+        fig_tree.update_traces(
+            textinfo="label+value+percent parent",
+            texttemplate="<b>%{label}</b><br>$%{value:,.0f}<br>%{percentParent:.1%}",
+        )
+        fig_tree.update_layout(
+            height=550, margin=dict(l=10, r=10, t=10, b=10),
+        )
+        st.plotly_chart(fig_tree, use_container_width=True)
+
+        st.divider()
+
         # ---- Вкладки у порядку зменшення volume (Crypto → Commodities → Indices → Stocks → FX) ----
         tab_labels = [f"{CATEGORY_EMOJI[cat]} {cat}" for cat in CATEGORY_ORDER]
         tabs = st.tabs(tab_labels)
