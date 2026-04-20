@@ -56,26 +56,40 @@ os.makedirs("data", exist_ok=True)
 # ---------------------------------------------------------------------------
 
 def _get(url, **kw):
-    """GET з retry до 8 разів, перевіркою status 200 і що тіло — JSON."""
-    for _ in range(8):
+    """
+    GET з retry до 8 разів, перевіркою status 200 і що тіло — JSON.
+
+    Обробка 403: ApeX та EdgeX повертають 403 при rate limit
+    (не стандартне 429). При 403 — довша пауза 5 сек.
+    """
+    r = None
+    for attempt in range(8):
         try:
             r = S.get(url, timeout=25, **kw)
             if r.status_code == 200 and r.text and r.text[0] in "{[":
                 return r
-            time.sleep(2)
+            # 403 = rate limit ban у ApeX/EdgeX — довша пауза
+            if r.status_code == 403:
+                time.sleep(5)
+            else:
+                time.sleep(2)
         except Exception:
             time.sleep(2)
     return r
 
 
 def _post(url, **kw):
-    """POST з retry до 8 разів."""
-    for _ in range(8):
+    """POST з retry до 8 разів з такою ж 403-обробкою."""
+    r = None
+    for attempt in range(8):
         try:
             r = S.post(url, timeout=25, **kw)
             if r.status_code == 200 and r.text and r.text[0] in "{[":
                 return r
-            time.sleep(2)
+            if r.status_code == 403:
+                time.sleep(5)
+            else:
+                time.sleep(2)
         except Exception:
             time.sleep(2)
     return r
@@ -436,36 +450,63 @@ def fetch_grvt():
 
 # ===========================================================================
 # 9. EdgeX — per-contract, з coin_map для базового токена (грабельки #8, #11)
+#
+# 🆕 Rate limit (грабелька #14): EdgeX не публікує офіційні ліміти, але з
+# емпіричних даних (лог 2026-04-20: 94 з 186 пар загубилось при 15 воркерах)
+# зʼясовано що паралельні запити призводять до 403/тихих failures.
+# Рішення: SEQUENTIAL виконання з паузою 0.2с між запитами = ~5 req/sec.
+# Час: 186 × 0.2 = ~37с (раніше було 120с з retry через 503).
 # ===========================================================================
 
-def _edgex_one(args):
-    c, coin_map = args
+EDGEX_DELAY = 0.2  # секунд між послідовними запитами (~5 req/sec)
+
+
+def _edgex_one(c: dict, coin_map: dict) -> tuple[dict | None, str | None]:
+    """
+    Повертає (result, error_reason).
+    error_reason = None при успіху, інакше — короткий опис причини відмови.
+    """
+    cid = c.get("contractId")
+    contract_name = c.get("contractName", "?")
     try:
-        cid = c.get("contractId")
-        r = _get(
-            f"https://pro.edgex.exchange/api/v1/public/quote/getTicker?contractId={cid}",
-        )
+        r = _get(f"https://pro.edgex.exchange/api/v1/public/quote/getTicker?contractId={cid}")
+
+        if r is None:
+            return None, f"{contract_name}: no response"
+        if r.status_code == 403:
+            return None, f"{contract_name}: 403 rate limit ban"
         if r.status_code != 200:
-            return None
-        data = r.json().get("data", [])
+            return None, f"{contract_name}: HTTP {r.status_code}"
+
+        try:
+            payload = r.json()
+        except Exception:
+            return None, f"{contract_name}: invalid JSON"
+
+        # Грабелька: EdgeX використовує code='SUCCESS' як маркер успіху
+        if payload.get("code") != "SUCCESS":
+            return None, f"{contract_name}: code={payload.get('code')}"
+
+        data = payload.get("data", [])
         if not data:
-            return None
+            return None, f"{contract_name}: empty data (new/inactive contract)"
+
         t = data[0]
         base = coin_map.get(c.get("baseCoinId"), "")
         return {
-            "Pair":             c.get("contractName", ""),
-            "Base":             base,  # ← критично для категоризації (грабелька #11)
+            "Pair":             contract_name,
+            "Base":             base,
             "Price (USD)":      float(t.get("lastPrice") or 0),
-            "Volume 24h (USD)": float(t.get("value") or 0),  # грабелька #8 — value, не volume
+            "Volume 24h (USD)": float(t.get("value") or 0),
             "Open Interest":    float(t.get("openInterest") or 0),
             "Funding Rate":     float(t.get("fundingRate") or 0),
             "Change 24h (%)":   float(t.get("priceChangePercent") or 0) * 100,
             "Trades 24h":       int(float(t.get("trades") or 0)),
             "High 24h":         float(t.get("high") or 0),
             "Low 24h":          float(t.get("low") or 0),
-        }
-    except Exception:
-        return None
+        }, None
+    except Exception as e:
+        return None, f"{contract_name}: {type(e).__name__}: {e}"
 
 
 def fetch_edgex():
@@ -481,21 +522,32 @@ def fetch_edgex():
     active = [c for c in contracts if c.get("enableTrade") in (True, "true", None)]
     disabled = len(contracts) - len(active)
     log(f"   → {len(active)} активних з {len(contracts)} ({disabled} disabled *2USD)")
-    log(f"   → coin_map: {len(coin_map)} токенів (потрібно для правильного base)")
+    log(f"   → coin_map: {len(coin_map)} токенів")
+    log(f"   → послідовні запити з паузою {EDGEX_DELAY}с (~{1/EDGEX_DELAY:.0f} req/sec)...")
 
-    args_list = [(c, coin_map) for c in active]
     rows = []
-    with ThreadPoolExecutor(max_workers=15) as ex:
-        for i, res in enumerate(ex.map(_edgex_one, args_list)):
-            if res:
-                rows.append(res)
-            if i % 25 == 0 and i > 0:
-                time.sleep(0.5)
+    failures = []
+    for i, c in enumerate(active):
+        result, err = _edgex_one(c, coin_map)
+        if result:
+            rows.append(result)
+        elif err:
+            failures.append(err)
+        time.sleep(EDGEX_DELAY)
+        # Прогрес-лог кожні 50 запитів
+        if (i + 1) % 50 == 0:
+            log(f"   ... {i+1}/{len(active)} ({len(rows)} ok, {len(failures)} fail)")
 
     df = pd.DataFrame(rows).sort_values("Volume 24h (USD)", ascending=False).reset_index(drop=True)
-    log(f"✅ EdgeX: {len(df)} pairs, ${df['Volume 24h (USD)'].sum():,.0f} ({time.time()-t0:.1f}s)")
+    log(f"✅ EdgeX: {len(df)}/{len(active)} pairs, ${df['Volume 24h (USD)'].sum():,.0f} "
+        f"({time.time()-t0:.1f}s)")
 
-    # Передаємо 'Base' у categorize як base_col
+    # Якщо багато невдач — показати топ-5 причин для діагностики
+    if failures:
+        log(f"   ⚠️ {len(failures)} запитів не дали результату, приклади:")
+        for f in failures[:5]:
+            log(f"      • {f}")
+
     df = categorize.apply(df, "EdgeX", base_col="Base")
     df.to_parquet("data/edgex_cache.parquet", index=False)
     return df
@@ -503,23 +555,44 @@ def fetch_edgex():
 
 # ===========================================================================
 # 10. ApeX Omni — per-symbol, crossSymbolName + underlyingCurrencyId (грабельки #5, #6, #11)
+#
+# 🆕 Rate limit (грабелька #14): ApeX офіційно декларує 600 req / 60 сек по IP
+# (= 10 req/sec). При перевищенні — HTTP 403 + тимчасовий/постійний бан IP.
+# Рішення: SEQUENTIAL виконання з паузою 0.11с = ~9 req/sec (запас під ліміт).
+# Час: 133 × 0.11 = ~15с (раніше 10 воркерів паралельно → 10 пар губилося).
 # ===========================================================================
 
-def _apex_one(pc):
+APEX_DELAY = 0.11  # секунд між запитами (~9 req/sec, запас під 10/sec ліміт)
+
+
+def _apex_one(pc: dict) -> tuple[dict | None, str | None]:
     """
-    pc = {"symbol": "BTC-USDT", "crossSymbolName": "BTCUSDT", "underlyingCurrencyId": "BTC", ...}
+    pc = {"symbol": "BTC-USDT", "crossSymbolName": "BTCUSDT", "underlyingCurrencyId": "BTC"}
+    Повертає (result, error_reason).
     """
-    cs = pc["crossSymbolName"]  # без дефіса (грабелька #5)
-    display = pc["symbol"]       # з дефісом
-    base = pc.get("underlyingCurrencyId") or display.split("-")[0]  # грабелька #11
+    cs = pc.get("crossSymbolName", "")
+    display = pc.get("symbol", "?")
+    base = pc.get("underlyingCurrencyId") or display.split("-")[0]
 
     try:
         r = _get(f"https://omni.apex.exchange/api/v3/ticker?symbol={cs}")
+
+        if r is None:
+            return None, f"{display}: no response"
+        if r.status_code == 403:
+            return None, f"{display}: 403 rate limit ban"
         if r.status_code != 200:
-            return None
-        data = r.json().get("data", [])
+            return None, f"{display}: HTTP {r.status_code}"
+
+        try:
+            payload = r.json()
+        except Exception:
+            return None, f"{display}: invalid JSON"
+
+        data = payload.get("data", [])
         if not data:
-            return None
+            return None, f"{display}: empty data"
+
         t = data[0]
         return {
             "Pair":             display,
@@ -531,9 +604,9 @@ def _apex_one(pc):
             "Change 24h (%)":   float(t.get("price24hPcnt") or 0) * 100,
             "High 24h":         float(t.get("highPrice24h") or 0),
             "Low 24h":          float(t.get("lowPrice24h") or 0),
-        }
-    except Exception:
-        return None
+        }, None
+    except Exception as e:
+        return None, f"{display}: {type(e).__name__}: {e}"
 
 
 def fetch_apex():
@@ -544,17 +617,29 @@ def fetch_apex():
     # Тільки perpetualContract (грабелька #6)
     perps = r.get("data", {}).get("contractConfig", {}).get("perpetualContract", []) or []
     log(f"   → {len(perps)} PERP (відкинуто prediction/stock contracts)")
+    log(f"   → послідовні запити з паузою {APEX_DELAY}с (~{1/APEX_DELAY:.0f} req/sec, "
+        f"ліміт 10/sec по IP)...")
 
     rows = []
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        for i, res in enumerate(ex.map(_apex_one, perps)):
-            if res:
-                rows.append(res)
-            if i % 25 == 0 and i > 0:
-                time.sleep(0.5)
+    failures = []
+    for i, pc in enumerate(perps):
+        result, err = _apex_one(pc)
+        if result:
+            rows.append(result)
+        elif err:
+            failures.append(err)
+        time.sleep(APEX_DELAY)
+        if (i + 1) % 50 == 0:
+            log(f"   ... {i+1}/{len(perps)} ({len(rows)} ok, {len(failures)} fail)")
 
     df = pd.DataFrame(rows).sort_values("Volume 24h (USD)", ascending=False).reset_index(drop=True)
-    log(f"✅ ApeX Omni: {len(df)} pairs, ${df['Volume 24h (USD)'].sum():,.0f} ({time.time()-t0:.1f}s)")
+    log(f"✅ ApeX Omni: {len(df)}/{len(perps)} pairs, ${df['Volume 24h (USD)'].sum():,.0f} "
+        f"({time.time()-t0:.1f}s)")
+
+    if failures:
+        log(f"   ⚠️ {len(failures)} запитів не дали результату, приклади:")
+        for f in failures[:5]:
+            log(f"      • {f}")
 
     df = categorize.apply(df, "ApeX Omni", base_col="Base")
     df.to_parquet("data/apex_cache.parquet", index=False)
