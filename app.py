@@ -141,6 +141,29 @@ EXCHANGES = {
 }
 
 # ---------------------------------------------------------------------------
+# Категорії активів — кольори + емоджі + порядок (для легенд і teaser-bar)
+# ---------------------------------------------------------------------------
+
+CATEGORY_COLORS = {
+    "Crypto":      "#3B82F6",   # 🟦
+    "Stocks":      "#F97316",   # 🟧
+    "Commodities": "#92400E",   # 🟫
+    "FX":          "#EAB308",   # 🟨
+    "Indices":     "#A855F7",   # 🟪
+}
+
+CATEGORY_EMOJI = {
+    "Crypto":      "🟦",
+    "Stocks":      "🟧",
+    "Commodities": "🟫",
+    "FX":          "🟨",
+    "Indices":     "🟪",
+}
+
+# Порядок у teaser-bar: за обсягом у типовому снапшоті (Crypto найбільший, FX найменший)
+CATEGORY_ORDER = ["Crypto", "Commodities", "Indices", "Stocks", "FX"]
+
+# ---------------------------------------------------------------------------
 # Завантаження даних — універсальний loader для будь-якої біржі
 # ---------------------------------------------------------------------------
 
@@ -242,9 +265,22 @@ if selected_exchange is None:
     volumes = {name: VOLUMES[name] for name in SORTED_EXCHANGES}
     vol_total = sum(volumes.values())
 
-    # Total volumes — total одним великим metric, інші — нижче в сітці
+    # ---- Combined DF: об'єднана таблиця всіх бірж для агрегатних метрик ----
+    # Додаємо колонку 'Exchange' щоб розрізняти походження рядків.
+    combined_df = pd.concat(
+        [df.assign(Exchange=name) for name, df in dfs.items() if not df.empty],
+        ignore_index=True,
+    ) if any(not df.empty for df in dfs.values()) else pd.DataFrame()
+
+    total_pairs = len(combined_df)
+    unique_assets = combined_df["Asset Name"].dropna().nunique() if not combined_df.empty else 0
+
+    # ---- Hero metrics: 3 колонки зверху ----
     st.subheader("Total Volume 24h")
-    st.metric(f"All {len(EXCHANGES)} exchanges", fmt_usd(vol_total))
+    h1, h2, h3 = st.columns(3)
+    h1.metric(f"All {len(EXCHANGES)} exchanges", fmt_usd(vol_total))
+    h2.metric("Active PERP pairs", f"{total_pairs:,}")
+    h3.metric("Unique assets", f"{unique_assets:,}")
 
     # Сітка 5×2 з біржами (10 бірж = 2 ряди по 5)
     items = list(volumes.items())
@@ -253,6 +289,52 @@ if selected_exchange is None:
         cols = st.columns(5)
         for i, (name, vol) in enumerate(row_items):
             cols[i].metric(name, fmt_usd(vol))
+
+    st.divider()
+
+    # ---- Asset Class Breakdown — horizontal bar (teaser для Categories page) ----
+    st.subheader("Asset Class Breakdown")
+    st.caption("Share of total 24h volume by category")
+
+    if not combined_df.empty:
+        cat_vol = (
+            combined_df.groupby("Category")["Volume 24h (USD)"]
+            .sum()
+            .reindex(CATEGORY_ORDER)
+            .dropna()
+        )
+        cat_total = cat_vol.sum()
+
+        # Horizontal stacked bar — 1 рядок, 5 кольорових сегментів
+        teaser_rows = []
+        for cat, vol in cat_vol.items():
+            pct = vol / cat_total * 100 if cat_total else 0
+            teaser_rows.append({
+                "Category": cat,
+                "Volume":   vol,
+                "Share":    pct,
+                "Label":    f"{CATEGORY_EMOJI[cat]} {cat} · {pct:.2f}%",
+            })
+        teaser_df = pd.DataFrame(teaser_rows)
+
+        fig_teaser = px.bar(
+            teaser_df,
+            x="Volume", y=["All categories"] * len(teaser_df),
+            color="Category", color_discrete_map=CATEGORY_COLORS,
+            orientation="h",
+            hover_data={"Share": ":.2f", "Volume": ":,.0f"},
+            text="Label",
+            category_orders={"Category": CATEGORY_ORDER},
+        )
+        fig_teaser.update_traces(textposition="inside", insidetextanchor="middle")
+        fig_teaser.update_layout(
+            height=180, showlegend=True,
+            xaxis_title=None, yaxis_title=None,
+            margin=dict(l=10, r=10, t=10, b=10),
+        )
+        fig_teaser.update_xaxes(showticklabels=False, showgrid=False)
+        fig_teaser.update_yaxes(showticklabels=False)
+        st.plotly_chart(fig_teaser, use_container_width=True)
 
     st.divider()
 
@@ -366,33 +448,180 @@ else:
             f"Run fetch via GitHub Actions."
         )
     else:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Active pairs",      len(df))
-        c2.metric("Top pair",          df["Pair"].iloc[0])
-        c3.metric("Total volume 24h",  fmt_usd(df["Volume 24h (USD)"].sum()))
+        # ---- Hero metrics: 4 колонки ----
+        exch_total_vol = df["Volume 24h (USD)"].sum()
+        exch_unique = df["Asset Name"].dropna().nunique()
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Active pairs",     len(df))
+        c2.metric("Unique assets",    f"{exch_unique:,}")
+        c3.metric("Top pair",         df["Pair"].iloc[0])
+        c4.metric("Total volume 24h", fmt_usd(exch_total_vol))
 
-        bar_kwargs = dict(
-            x="Pair", y="Volume 24h (USD)",
-            color=cfg["color_col"], color_continuous_scale="RdYlGn",
-            color_continuous_midpoint=0,
-        )
-        fig = px.bar(df.head(10), **bar_kwargs)
-        fig.update_layout(xaxis_tickangle=-45, height=420)
-        st.plotly_chart(fig, use_container_width=True)
+        # ---- Mini Asset Class breakdown (горизонтальний bar для однієї біржі) ----
+        if df["Category"].notna().any():
+            mini_cat = (
+                df.groupby("Category")["Volume 24h (USD)"]
+                .sum()
+                .reindex(CATEGORY_ORDER)
+                .dropna()
+            )
+            mini_total = mini_cat.sum()
+            if mini_total > 0:
+                mini_rows = []
+                for cat, vol in mini_cat.items():
+                    pct = vol / mini_total * 100
+                    mini_rows.append({
+                        "Category": cat,
+                        "Volume":   vol,
+                        "Label":    f"{CATEGORY_EMOJI[cat]} {cat} · {pct:.1f}%",
+                    })
+                mini_df = pd.DataFrame(mini_rows)
 
-        col_config = {
-            cfg["price_col"]:    PRICE_FMT,
-            "Volume 24h (USD)":  USD_FMT,
-            "Open Interest":     USD_FMT,
-            "Change 24h (%)":    PCT_FMT,
-            "Trades 24h":        st.column_config.NumberColumn(format="%d"),
-            "High 24h":          PRICE_FMT,
-            "Low 24h":           PRICE_FMT,
-        }
-        if cfg["color_format"]:
-            col_config[cfg["color_col"]] = st.column_config.NumberColumn(format=cfg["color_format"])
+                fig_mini = px.bar(
+                    mini_df,
+                    x="Volume", y=[selected_exchange] * len(mini_df),
+                    color="Category", color_discrete_map=CATEGORY_COLORS,
+                    orientation="h", text="Label",
+                    category_orders={"Category": CATEGORY_ORDER},
+                    hover_data={"Volume": ":,.0f"},
+                )
+                fig_mini.update_traces(textposition="inside", insidetextanchor="middle")
+                fig_mini.update_layout(
+                    height=140, showlegend=False,
+                    xaxis_title=None, yaxis_title=None,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                fig_mini.update_xaxes(showticklabels=False, showgrid=False)
+                fig_mini.update_yaxes(showticklabels=False)
+                st.plotly_chart(fig_mini, use_container_width=True)
 
-        st.dataframe(
-            df, use_container_width=True, hide_index=True,
-            column_config=col_config,
-        )
+        st.divider()
+
+        # =======================================================================
+        # HIP-3 breakdown — ТІЛЬКИ для Hyperliquid
+        # Radio: Detailed (усі пари) vs Aggregated (згорнуті по dex)
+        # =======================================================================
+
+        show_aggregated = False
+        if selected_exchange == "Hyperliquid" and df["HIP-3 Dex"].notna().any():
+            st.subheader("HIP-3 breakdown")
+            st.caption(
+                "Native — базовий orderbook Hyperliquid; "
+                "HIP-3 dexes — під-біржі на інфраструктурі Hyperliquid (xyz = Trade.XYZ тощо)"
+            )
+
+            view_mode = st.radio(
+                label="View mode",
+                options=["Detailed (all pairs)", "Aggregated (by dex)"],
+                horizontal=True,
+                label_visibility="collapsed",
+                key="hl_view_mode",
+            )
+            show_aggregated = (view_mode == "Aggregated (by dex)")
+
+            if show_aggregated:
+                # Агрегатна таблиця: рядок на кожен dex (включно з "native")
+                agg_df = df.copy()
+                agg_df["Dex"] = agg_df["HIP-3 Dex"].fillna("native")
+                agg_table = (
+                    agg_df.groupby("Dex")
+                    .agg(
+                        Pairs=("Pair", "count"),
+                        Volume=("Volume 24h (USD)", "sum"),
+                    )
+                    .sort_values("Volume", ascending=False)
+                    .reset_index()
+                )
+                # Додаємо "головну" категорію для кожного dex (найпопулярніша за volume)
+                focus = (
+                    agg_df.groupby(["Dex", "Category"])["Volume 24h (USD)"].sum()
+                    .reset_index()
+                    .sort_values("Volume 24h (USD)", ascending=False)
+                    .drop_duplicates("Dex")
+                    [["Dex", "Category"]]
+                    .rename(columns={"Category": "Primary Category"})
+                )
+                agg_table = agg_table.merge(focus, on="Dex", how="left")
+
+                st.dataframe(
+                    agg_table,
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "Pairs":  st.column_config.NumberColumn(format="%d"),
+                        "Volume": USD_FMT,
+                    },
+                )
+
+        # =======================================================================
+        # Category filter + bar chart + таблиця пар
+        # =======================================================================
+
+        if not show_aggregated:
+            st.subheader("Pairs")
+
+            # ---- Category filter: мультивибір по категоріях, присутніх у цій біржі ----
+            categories_present = sorted(df["Category"].dropna().unique().tolist())
+            if categories_present:
+                # Формуємо опції з емоджі для UX
+                cat_labels = {
+                    cat: f"{CATEGORY_EMOJI.get(cat, '⬜')} {cat}"
+                    for cat in categories_present
+                }
+                selected_cats = st.multiselect(
+                    label="Filter by category",
+                    options=categories_present,
+                    default=categories_present,
+                    format_func=lambda c: cat_labels[c],
+                    label_visibility="collapsed",
+                )
+                if selected_cats:
+                    df_view = df[df["Category"].isin(selected_cats)].copy()
+                else:
+                    df_view = df.iloc[0:0].copy()  # нічого не обрано — порожньо
+            else:
+                df_view = df.copy()
+
+            if df_view.empty:
+                st.info("No pairs matching the selected categories.")
+            else:
+                # ---- Bar chart: top-10 пар з df_view ----
+                bar_kwargs = dict(
+                    x="Pair", y="Volume 24h (USD)",
+                    color=cfg["color_col"], color_continuous_scale="RdYlGn",
+                    color_continuous_midpoint=0,
+                )
+                fig = px.bar(df_view.head(10), **bar_kwargs)
+                fig.update_layout(xaxis_tickangle=-45, height=420)
+                st.plotly_chart(fig, use_container_width=True)
+
+                # ---- Таблиця пар: з новими колонками (Category, Asset Name, HIP-3 Dex) ----
+                # Формуємо порядок колонок: ідентифікація → ціна/volume → ризики/OI → extras
+                preferred_order = [
+                    "Pair", "Base", "Canonical Base", "Asset Name",
+                    "Category", "HIP-3 Dex",
+                    cfg["price_col"], "Volume 24h (USD)", "Open Interest",
+                    "Change 24h (%)", "Funding Rate",
+                    "Trades 24h", "High 24h", "Low 24h",
+                    "Quote Currency",
+                ]
+                col_order = [c for c in preferred_order if c in df_view.columns]
+                # Додаємо колонки, яких немає у preferred_order (резерв на майбутнє)
+                col_order += [c for c in df_view.columns if c not in col_order]
+                df_display = df_view[col_order]
+
+                col_config = {
+                    cfg["price_col"]:    PRICE_FMT,
+                    "Volume 24h (USD)":  USD_FMT,
+                    "Open Interest":     USD_FMT,
+                    "Change 24h (%)":    PCT_FMT,
+                    "Trades 24h":        st.column_config.NumberColumn(format="%d"),
+                    "High 24h":          PRICE_FMT,
+                    "Low 24h":           PRICE_FMT,
+                }
+                if cfg["color_format"]:
+                    col_config[cfg["color_col"]] = st.column_config.NumberColumn(format=cfg["color_format"])
+
+                st.dataframe(
+                    df_display, use_container_width=True, hide_index=True,
+                    column_config=col_config,
+                )
