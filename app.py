@@ -28,7 +28,7 @@ EXCHANGES = {
         "price_col":    "Price (USDC)",
         "color_col":    "Funding Rate",
         "color_format": "%.8f",
-        "logo_url":     "https://coin-images.coingecko.com/markets/images/1208/small/Hyperliquid_logo.png?1706865217",
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/1208/large/Hyperliquid_logo.png?1706865217",
     },
     "Aster DEX": {
         "parquet":      "data/aster_cache.parquet",
@@ -40,7 +40,7 @@ EXCHANGES = {
         "price_col":    "Price (USDT)",
         "color_col":    "Change 24h (%)",
         "color_format": None,
-        "logo_url":     "https://coin-images.coingecko.com/markets/images/22084/small/aster-profile-200.png?1756966162",
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/22084/large/aster-profile-200.png?1756966162",
     },
     "Lighter": {
         "parquet":      "data/lighter_cache.parquet",
@@ -52,7 +52,7 @@ EXCHANGES = {
         "price_col":    "Price",
         "color_col":    "Change 24h (%)",
         "color_format": None,
-        "logo_url":     "https://coin-images.coingecko.com/markets/images/22097/small/lighter.jpg?1758003181",
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/22097/large/lighter.jpg?1758003181",
     },
     "Paradex": {
         "parquet":      "data/paradex_cache.parquet",
@@ -64,7 +64,7 @@ EXCHANGES = {
         "price_col":    "Price (USDC)",
         "color_col":    "Change 24h (%)",
         "color_format": None,
-        "logo_url":     "https://coin-images.coingecko.com/markets/images/1310/small/paradex.jpg?1772694430",
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/1310/large/paradex.jpg?1772694430",
     },
     "Variational Omni": {
         "parquet":      "data/variational_cache.parquet",
@@ -76,7 +76,7 @@ EXCHANGES = {
         "price_col":    "Price (USDC)",
         "color_col":    "Funding Rate",
         "color_format": "%.6f",
-        "logo_url":     "https://coin-images.coingecko.com/markets/images/22231/small/Variational_Blue_Space-Blue-Mark-Space-Blue-Background.png?1773646635",
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/22231/large/Variational_Blue_Space-Blue-Mark-Space-Blue-Background.png?1773646635",
     },
     "Extended": {
         "parquet":      "data/extended_cache.parquet",
@@ -88,7 +88,7 @@ EXCHANGES = {
         "price_col":    "Price (USD)",
         "color_col":    "Change 24h (%)",
         "color_format": None,
-        "logo_url":     "https://coin-images.coingecko.com/markets/images/22114/small/extended.png?1759117306",
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/22114/large/extended.png?1759117306",
     },
     "Pacifica": {
         "parquet":      "data/pacifica_cache.parquet",
@@ -100,7 +100,7 @@ EXCHANGES = {
         "price_col":    "Price (USD)",
         "color_col":    "Change 24h (%)",
         "color_format": None,
-        "logo_url":     "https://coin-images.coingecko.com/markets/images/22171/small/Cyan_Logo_Dark_Background_%281%29.png?1764569549",
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/22171/large/Cyan_Logo_Dark_Background_%281%29.png?1764569549",
     },
     "GRVT": {
         "parquet":      "data/grvt_cache.parquet",
@@ -112,7 +112,7 @@ EXCHANGES = {
         "price_col":    "Price (USDT)",
         "color_col":    "Change 24h (%)",
         "color_format": None,
-        "logo_url":     "https://coin-images.coingecko.com/markets/images/11862/small/grvt.jpg?1768789669",
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/11862/large/grvt.jpg?1768789669",
     },
     "EdgeX": {
         "parquet":      "data/edgex_cache.parquet",
@@ -124,7 +124,7 @@ EXCHANGES = {
         "price_col":    "Price (USD)",
         "color_col":    "Change 24h (%)",
         "color_format": None,
-        "logo_url":     "https://coin-images.coingecko.com/markets/images/11726/small/Square.png?1775697036",
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/11726/large/Square.png?1775697036",
     },
     "ApeX Omni": {
         "parquet":      "data/apex_cache.parquet",
@@ -136,7 +136,7 @@ EXCHANGES = {
         "price_col":    "Price (USDT)",
         "color_col":    "Change 24h (%)",
         "color_format": None,
-        "logo_url":     "https://coin-images.coingecko.com/markets/images/1669/small/100*100.PNG?1721201012",
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/1669/large/100*100.PNG?1721201012",
     },
 }
 
@@ -164,10 +164,16 @@ PRICE_FMT = st.column_config.NumberColumn(format="$%.4f")
 # ---------------------------------------------------------------------------
 
 _QUOTE_SUFFIXES = ("USDT", "USDC", "USD", "BUSD", "PERP")
+_DELIMITERS = "/-_"  # розділювачі: '/' Hyperliquid, '-' Paradex/ApeX, '_' GRVT
 
 def get_base_symbol(pair: str) -> str:
-    """Витягує базовий символ з пари: 'BTC-USD-PERP' → 'BTC', 'ETHUSDT' → 'ETH'."""
-    s = pair.split("/")[0].split("-")[0].upper()
+    """Витягує базовий символ: 'BTC-USD-PERP' → 'BTC', 'BTC_USDT_Perp' → 'BTC', 'ETHUSDT' → 'ETH'."""
+    # Спершу обрізаємо все після першого роздільника (/, -, _)
+    s = pair
+    for delim in _DELIMITERS:
+        s = s.split(delim)[0]
+    s = s.upper()
+    # Потім обрізаємо суфікс quote-валюти, якщо він приклеєний без роздільника
     for suffix in _QUOTE_SUFFIXES:
         if s.endswith(suffix) and len(s) > len(suffix):
             return s[: -len(suffix)]
