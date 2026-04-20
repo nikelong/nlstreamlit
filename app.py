@@ -250,10 +250,10 @@ def _go_to_categories():
     st.session_state.page = "categories"
     st.session_state.nav_exchange = None
 
-def _on_exchange_click():
-    # Коли користувач обирає біржу у radio — переходимо у режим exchange
-    if st.session_state.get("nav_exchange"):
-        st.session_state.page = "exchange"
+def _on_exchange_click(exchange_name: str):
+    # Коли користувач клікає на кнопку біржі — переходимо у режим exchange
+    st.session_state.page = "exchange"
+    st.session_state.nav_exchange = exchange_name
 
 st.sidebar.button(
     "📊 Overview",
@@ -266,15 +266,31 @@ st.sidebar.button(
     use_container_width=True,
 )
 
+st.sidebar.divider()
 st.sidebar.markdown("### 🏛 Exchanges")
 
-selected_exchange = st.sidebar.radio(
-    label="exchanges",
-    options=SORTED_EXCHANGES,
-    label_visibility="collapsed",
-    index=None,
-    key="nav_exchange",
-    on_change=_on_exchange_click,
+# 10 окремих кнопок — кожна біржа як окрема кнопка з однаковим UX,
+# що і Overview/Categories. Порядок — за SORTED_EXCHANGES (спадання volume).
+for exchange_name in SORTED_EXCHANGES:
+    # Активна біржа виділяється жирним через type="primary"
+    is_active = (
+        st.session_state.page == "exchange"
+        and st.session_state.get("nav_exchange") == exchange_name
+    )
+    st.sidebar.button(
+        exchange_name,
+        key=f"btn_exchange_{exchange_name}",
+        on_click=_on_exchange_click,
+        args=(exchange_name,),
+        use_container_width=True,
+        type="primary" if is_active else "secondary",
+    )
+
+# Сумісність зі старим кодом нижче — selected_exchange тягнемо з session_state
+selected_exchange = (
+    st.session_state.get("nav_exchange")
+    if st.session_state.page == "exchange"
+    else None
 )
 
 # ===========================================================================
