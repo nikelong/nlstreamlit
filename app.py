@@ -236,7 +236,7 @@ SORTED_EXCHANGES = sorted(EXCHANGES.keys(), key=lambda n: VOLUMES[n], reverse=Tr
 #   "exchange"   → детальна сторінка обраної біржі (nav_exchange != None)
 # ---------------------------------------------------------------------------
 
-st.sidebar.title("Market Data")
+st.sidebar.title("💸 Market Data")
 
 # Ініціалізація page state
 if "page" not in st.session_state:
