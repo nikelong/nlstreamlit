@@ -185,6 +185,65 @@ def load_exchange(name: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 # ---------------------------------------------------------------------------
+# Geography aggregation — агрегує country shares по всіх біржах
+# ---------------------------------------------------------------------------
+
+def build_geo_aggregate(radar_df: pd.DataFrame, volumes: dict) -> pd.DataFrame:
+    """
+    Повертає DataFrame з колонками:
+      CountryCode, CountryName, Flag, Unweighted, Weighted, Coverage
+
+    Математика:
+      Unweighted = mean(Share_i)                    для i де країна присутня
+      Weighted   = sum(w_i * Share_i) / sum(w_i)    (знаменник — по присутніх)
+      Coverage   = count(i)
+
+    Відсортовано за Weighted спаданням.
+    """
+    empty = pd.DataFrame(columns=[
+        "CountryCode", "CountryName", "Flag",
+        "Unweighted", "Weighted", "Coverage",
+    ])
+    if radar_df.empty:
+        return empty
+
+    total_vol = sum(volumes.values())
+    if total_vol <= 0:
+        # Fallback: рівні ваги якщо всі volumes = 0
+        weight_map = {name: 1.0 / len(volumes) for name in volumes}
+    else:
+        weight_map = {name: v / total_vol for name, v in volumes.items()}
+
+    df = radar_df.copy()
+    df["_weight"] = df["Exchange"].map(weight_map).fillna(0.0)
+
+    def _agg(group: pd.DataFrame) -> pd.Series:
+        shares = group["Share"]
+        weights = group["_weight"]
+        weights_sum = weights.sum()
+        unweighted = shares.mean()
+        if weights_sum > 0:
+            weighted = (shares * weights).sum() / weights_sum
+        else:
+            weighted = unweighted
+        return pd.Series({
+            "CountryName": group["CountryName"].iloc[0],
+            "Flag":        group["Flag"].iloc[0],
+            "Unweighted":  unweighted,
+            "Weighted":    weighted,
+            "Coverage":    len(group),
+        })
+
+    agg = (
+        df.groupby("CountryCode", as_index=False)
+          .apply(_agg, include_groups=False)
+          .reset_index(drop=True)
+    )
+    agg = agg.sort_values("Weighted", ascending=False).reset_index(drop=True)
+    return agg[["CountryCode", "CountryName", "Flag",
+                "Unweighted", "Weighted", "Coverage"]]
+
+# ---------------------------------------------------------------------------
 # Column configs
 # ---------------------------------------------------------------------------
 
@@ -250,6 +309,10 @@ def _go_to_categories():
     st.session_state.page = "categories"
     st.session_state.nav_exchange = None
 
+def _go_to_geography():
+    st.session_state.page = "geography"
+    st.session_state.nav_exchange = None
+
 def _on_exchange_click(exchange_name: str):
     # Коли користувач клікає на кнопку біржі — переходимо у режим exchange
     st.session_state.page = "exchange"
@@ -263,6 +326,11 @@ st.sidebar.button(
 st.sidebar.button(
     "🎨 Categories",
     on_click=_go_to_categories,
+    use_container_width=True,
+)
+st.sidebar.button(
+    "🌍 Geography",
+    on_click=_go_to_geography,
     use_container_width=True,
 )
 
@@ -715,6 +783,133 @@ elif st.session_state.page == "categories":
                     f"Rows are groupable by **Asset** (e.g., Gold combines XAU + XAUT + PAXG). "
                     f"Click any column header to re-sort."
                 )
+
+# ===========================================================================
+# GEOGRAPHY — агрегована карта світу з усіх 10 бірж
+# ===========================================================================
+
+elif st.session_state.page == "geography":
+    st.title("Global Geography")
+    st.caption("Aggregated traffic across all 10 exchanges · Cloudflare Radar data")
+
+    # Завантажуємо radar_cache — той самий файл, що живить Visitors по біржі
+    radar_path = "data/radar_cache.parquet"
+    try:
+        radar_df = pd.read_parquet(radar_path)
+    except Exception:
+        radar_df = pd.DataFrame()
+
+    if radar_df.empty:
+        st.info(
+            "Cloudflare Radar data is not available yet. "
+            "Trigger the `Fetch data` workflow in GitHub Actions "
+            "to populate `data/radar_cache.parquet`."
+        )
+    else:
+        # Агрегація через чисту функцію (покриту unit-тестами)
+        geo_df = build_geo_aggregate(radar_df, VOLUMES)
+
+        # ---- Hero metrics: 3 колонки ----
+        g1, g2, g3 = st.columns(3)
+        g1.metric("Exchanges tracked", radar_df["Exchange"].nunique())
+        g2.metric("Unique countries",  len(geo_df))
+        fetched_raw = (
+            radar_df["FetchedAt"].iloc[0]
+            if "FetchedAt" in radar_df.columns and len(radar_df) > 0
+            else ""
+        )
+        fetched_display = fetched_raw[:10] if fetched_raw else "n/a"
+        g3.metric("Snapshot date", fetched_display)
+
+        st.caption(
+            "📡 Aggregation methodology: for each country we compute three metrics "
+            "across exchanges where the country appears in Cloudflare Radar top rankings. "
+            "**Unweighted** is a simple mean across those exchanges (equal vote per exchange). "
+            "**Weighted** is a mean weighted by each exchange's 24h trading volume "
+            "(market-share vote). **Coverage** shows how many of the 10 exchanges list "
+            "the country in their top rankings — a divergence between Unweighted and "
+            "Weighted signals whether a country concentrates on large or small exchanges."
+        )
+
+        # ---- Metric picker над картою ----
+        metric_choice = st.radio(
+            label="Map metric",
+            options=["Weighted", "Unweighted", "Coverage"],
+            index=0,
+            horizontal=True,
+            help=(
+                "Weighted — volume-weighted mean share. "
+                "Unweighted — simple mean across exchanges. "
+                "Coverage — number of exchanges (1–10) where the country appears."
+            ),
+        )
+
+        # ---- Choropleth світова карта ----
+        if metric_choice == "Coverage":
+            color_scale = "Viridis"
+            labels_map  = {"Coverage": "Exchanges (N/10)"}
+            hover_fmt   = {
+                "CountryName": False,
+                "CountryCode": True,
+                "Coverage":    True,
+                "Unweighted":  ":.2f",
+                "Weighted":    ":.2f",
+            }
+        else:
+            color_scale = "Plasma"
+            labels_map  = {metric_choice: f"{metric_choice} %"}
+            hover_fmt   = {
+                "CountryName": False,
+                "CountryCode": True,
+                "Unweighted":  ":.2f",
+                "Weighted":    ":.2f",
+                "Coverage":    True,
+            }
+
+        fig_map = px.choropleth(
+            geo_df,
+            locations="CountryName",
+            locationmode="country names",
+            color=metric_choice,
+            hover_name="CountryName",
+            hover_data=hover_fmt,
+            color_continuous_scale=color_scale,
+            labels=labels_map,
+        )
+        fig_map.update_layout(
+            height=520,
+            margin=dict(l=0, r=0, t=10, b=0),
+            geo=dict(
+                showframe=False,
+                showcoastlines=True,
+                projection_type="natural earth",
+            ),
+        )
+        st.plotly_chart(fig_map, use_container_width=True)
+
+        # ---- Таблиця всіх країн: завжди показує всі три метрики + Coverage ----
+        st.subheader("All countries")
+        table_df = geo_df.copy()
+        # Формат Coverage як "N/10" — string для кращої візуалізації
+        table_df["Coverage"] = table_df["Coverage"].apply(lambda n: f"{n}/10")
+        display_df = table_df[[
+            "Flag", "CountryName", "CountryCode",
+            "Unweighted", "Weighted", "Coverage",
+        ]].copy()
+        display_df.columns = [
+            "", "Country", "Code",
+            "Unweighted %", "Weighted %", "Coverage",
+        ]
+
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Unweighted %": st.column_config.NumberColumn(format="%.2f%%"),
+                "Weighted %":   st.column_config.NumberColumn(format="%.2f%%"),
+            },
+        )
 
 # ===========================================================================
 # EXCHANGE DETAIL
