@@ -221,28 +221,21 @@ selected_exchange = st.sidebar.radio(
     key="nav_exchange",
 )
 
-st.sidebar.divider()
-st.sidebar.markdown("### ℹ️ Про дашборд")
-st.sidebar.markdown(
-    "Cross-exchange аналітика 10 perpetual DEX. "
-    "Дані оновлюються через GitHub Actions."
-)
-
 # ===========================================================================
 # OVERVIEW (за замовчуванням, якщо біржа не обрана)
 # ===========================================================================
 
 if selected_exchange is None:
     st.title("Perp DEX — Market Data")
-    st.caption("Cross-exchange analytics · дані з локального кешу")
+    st.caption("Cross-exchange analytics · cached locally")
 
     dfs = ALL_DFS  # вже завантажено вище
 
     errors = [name for name, df in dfs.items() if df.empty]
     if errors:
         st.warning(
-            f"Файл не знайдено для: {', '.join(errors)}. "
-            f"Запустіть fetch через GitHub Actions."
+            f"No data file for: {', '.join(errors)}. "
+            f"Run fetch via GitHub Actions."
         )
 
     # Volumes у відсортованому порядку
@@ -304,7 +297,7 @@ if selected_exchange is None:
 
     # Cross-exchange common pairs (де торгується ≥3 біржах)
     st.subheader("Cross-Exchange Comparison — Common Pairs")
-    st.caption("Пари, що торгуються одночасно на ≥3 біржах")
+    st.caption("Pairs traded simultaneously on ≥3 exchanges")
 
     syms_per_exchange = {
         name: {get_base_symbol(r["Pair"]): r["Volume 24h (USD)"]
@@ -362,7 +355,6 @@ else:
     with title_col:
         st.markdown(
             f"# {selected_exchange}\n\n"
-            f"Source: [{cfg['source_label']}]({cfg['source_url']}) · "
             f"🔗 [{cfg['trade_label']}]({cfg['trade_url']})"
         )
 
@@ -370,8 +362,8 @@ else:
 
     if df.empty:
         st.error(
-            f"Файл `{cfg['parquet']}` не знайдено. "
-            f"Запустіть fetch через GitHub Actions."
+            f"Data file `{cfg['parquet']}` not found. "
+            f"Run fetch via GitHub Actions."
         )
     else:
         c1, c2, c3 = st.columns(3)
