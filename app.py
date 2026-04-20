@@ -220,17 +220,39 @@ VOLUMES = {name: df["Volume 24h (USD)"].sum() if not df.empty else 0
 SORTED_EXCHANGES = sorted(EXCHANGES.keys(), key=lambda n: VOLUMES[n], reverse=True)
 
 # ---------------------------------------------------------------------------
-# Sidebar — кнопка Overview (action) + radio для вибору біржі (selection)
+# Sidebar — три режими навігації через явний page state:
+#   "overview"   → головна сторінка з cross-exchange метриками
+#   "categories" → 5 табів по категоріях з зведеними таблицями по активу
+#   "exchange"   → детальна сторінка обраної біржі (nav_exchange != None)
 # ---------------------------------------------------------------------------
 
 st.sidebar.title("Perp DEX")
 
+# Ініціалізація page state
+if "page" not in st.session_state:
+    st.session_state.page = "overview"
+
 def _go_to_overview():
+    st.session_state.page = "overview"
     st.session_state.nav_exchange = None
+
+def _go_to_categories():
+    st.session_state.page = "categories"
+    st.session_state.nav_exchange = None
+
+def _on_exchange_click():
+    # Коли користувач обирає біржу у radio — переходимо у режим exchange
+    if st.session_state.get("nav_exchange"):
+        st.session_state.page = "exchange"
 
 st.sidebar.button(
     "📊 Overview",
     on_click=_go_to_overview,
+    use_container_width=True,
+)
+st.sidebar.button(
+    "🎨 Categories",
+    on_click=_go_to_categories,
     use_container_width=True,
 )
 
@@ -242,13 +264,14 @@ selected_exchange = st.sidebar.radio(
     label_visibility="collapsed",
     index=None,
     key="nav_exchange",
+    on_change=_on_exchange_click,
 )
 
 # ===========================================================================
-# OVERVIEW (за замовчуванням, якщо біржа не обрана)
+# OVERVIEW (за замовчуванням)
 # ===========================================================================
 
-if selected_exchange is None:
+if st.session_state.page == "overview":
     st.title("Perp DEX — Market Data")
     st.caption("Cross-exchange analytics · cached locally")
 
@@ -463,10 +486,123 @@ if selected_exchange is None:
         st.info("No common pairs found across ≥3 exchanges.")
 
 # ===========================================================================
+# CATEGORIES — 5 вкладок (Crypto / Stocks / Commodities / FX / Indices)
+# ===========================================================================
+
+elif st.session_state.page == "categories":
+    st.title("Asset Categories")
+    st.caption("Cross-exchange breakdown by asset, grouped by category")
+
+    # Об'єднуємо всі біржі в один DF з колонкою Exchange
+    all_combined = pd.concat(
+        [df.assign(Exchange=name) for name, df in ALL_DFS.items() if not df.empty],
+        ignore_index=True,
+    ) if any(not df.empty for df in ALL_DFS.values()) else pd.DataFrame()
+
+    if all_combined.empty:
+        st.error("No data available. Run fetch via GitHub Actions.")
+    else:
+        # Fallback: якщо у parquet немає колонки Display Asset (стара версія даних) —
+        # будуємо її "на льоту" через той самий словник ASSET_GROUPS.
+        # Це дозволяє сторінці працювати одразу після commit app.py, не чекаючи re-run fetch.yml.
+        if "Display Asset" not in all_combined.columns:
+            try:
+                from categorize import ASSET_GROUPS, display_asset
+            except ImportError:
+                # Якщо categorize.py ще не деплоєно — безпечний мінімальний словник
+                ASSET_GROUPS = {
+                    "XAU": "Gold", "GOLD": "Gold", "XAUT": "Gold", "PAXG": "Gold",
+                    "CL": "Crude Oil", "WTI": "Crude Oil", "BRENTOIL": "Crude Oil",
+                    "XBR": "Crude Oil", "BZ": "Crude Oil", "OIL": "Crude Oil", "USOIL": "Crude Oil",
+                    "XAG": "Silver", "SILVER": "Silver",
+                    "XPT": "Platinum", "PLATINUM": "Platinum",
+                    "XPD": "Palladium", "PALLADIUM": "Palladium",
+                    "XCU": "Copper", "COPPER": "Copper",
+                    "NATGAS": "Natural Gas", "GAS": "Natural Gas", "XNG": "Natural Gas",
+                    "SP500": "S&P 500", "SPX": "S&P 500", "ES": "S&P 500", "SPX500": "S&P 500",
+                    "QQQ": "Nasdaq-100", "NDX": "Nasdaq-100", "NASDAQ100": "Nasdaq-100",
+                    "GOOGL": "Alphabet (Google)", "GOOG": "Alphabet (Google)",
+                }
+                def display_asset(canon, name):
+                    if not canon:
+                        return name
+                    return ASSET_GROUPS.get(str(canon).upper(), name)
+
+            all_combined["Display Asset"] = [
+                display_asset(c, n)
+                for c, n in zip(
+                    all_combined["Canonical Base"].fillna(""),
+                    all_combined["Asset Name"].fillna(""),
+                )
+            ]
+
+        # ---- Вкладки у порядку зменшення volume (Crypto → Commodities → Indices → Stocks → FX) ----
+        tab_labels = [f"{CATEGORY_EMOJI[cat]} {cat}" for cat in CATEGORY_ORDER]
+        tabs = st.tabs(tab_labels)
+
+        for i, cat in enumerate(CATEGORY_ORDER):
+            with tabs[i]:
+                sub = all_combined[all_combined["Category"] == cat].copy()
+
+                if sub.empty:
+                    st.info(f"No {cat} pairs found in current data.")
+                    continue
+
+                # Відкидаємо рядки без Display Asset (захист від NaN)
+                sub = sub[sub["Display Asset"].notna() & (sub["Display Asset"] != "")]
+
+                # ---- Hero-метрики: 3 картки зверху вкладки ----
+                total_pairs   = len(sub)
+                unique_assets = sub["Display Asset"].nunique()
+                total_vol     = sub["Volume 24h (USD)"].sum()
+
+                h1, h2, h3 = st.columns(3)
+                h1.metric("Total Pairs",   f"{total_pairs:,}")
+                h2.metric("Unique Assets", f"{unique_assets:,}")
+                h3.metric("Volume 24h",    fmt_usd(total_vol))
+
+                # ---- Зведена таблиця: group by Display Asset ----
+                agg = (
+                    sub.groupby("Display Asset")
+                    .agg(
+                        Volume=("Volume 24h (USD)", "sum"),
+                        Exchanges=("Exchange", "nunique"),
+                        Pairs=("Pair", "count"),
+                    )
+                    .sort_values("Volume", ascending=False)
+                    .reset_index()
+                )
+                # Нумерація з префіксом emoji категорії — виглядає як у макеті (🟦 1, 🟦 2, ...)
+                emoji = CATEGORY_EMOJI[cat]
+                agg.insert(0, "#", [f"{emoji} {i+1}" for i in range(len(agg))])
+
+                # Перейменовуємо колонки для дружнього заголовка
+                agg = agg.rename(columns={
+                    "Display Asset": "Asset",
+                    "Volume":        "Volume 24h (USD)",
+                })
+
+                st.dataframe(
+                    agg[["#", "Asset", "Pairs", "Exchanges", "Volume 24h (USD)"]],
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "#":                 st.column_config.TextColumn(width="small"),
+                        "Asset":             st.column_config.TextColumn(),
+                        "Pairs":             st.column_config.NumberColumn(format="%d"),
+                        "Exchanges":         st.column_config.NumberColumn(format="%d"),
+                        "Volume 24h (USD)":  USD_FMT,
+                    },
+                )
+                st.caption(
+                    f"Rows are groupable by **Asset** (e.g., Gold combines XAU + XAUT + PAXG). "
+                    f"Click any column header to re-sort."
+                )
+
+# ===========================================================================
 # EXCHANGE DETAIL
 # ===========================================================================
 
-else:
+elif st.session_state.page == "exchange" and selected_exchange:
     cfg = EXCHANGES[selected_exchange]
     df = load_exchange(selected_exchange)
 

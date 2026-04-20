@@ -516,6 +516,143 @@ USER_OVERRIDES = {k.upper(): v for k, v in USER_OVERRIDES.items()}
 
 
 # ---------------------------------------------------------------------------
+# ASSET_GROUPS — ручні агрегації для зведеної таблиці Categories page.
+# Flat словник: {Canonical Base: Display Asset}.
+# Якщо canonical base є у словнику → у колонці "Display Asset" буде значення звідси.
+# Якщо немає → fallback на Asset Name (як є зараз у parquet).
+#
+# Використовується ТІЛЬКИ для Categories page (групування однотипних активів у
+# один рядок: Gold = XAU + XAUT + PAXG тощо). Категоризація та інші колонки
+# залишаються незмінними.
+# ---------------------------------------------------------------------------
+
+ASSET_GROUPS: dict[str, str] = {
+    # -------- Commodities --------
+    # Gold (spot + tokenized): XAU spot, XAUT Tether Gold, PAXG PAX Gold, GLD ETF, IAU iShares
+    "XAU":          "Gold",
+    "GOLD":         "Gold",
+    "XAUT":         "Gold",
+    "PAXG":         "Gold",
+    "GLD":          "Gold",
+    "IAUUSD":       "Gold",
+
+    # Crude Oil (WTI + Brent об'єднано — це "нафта" з точки зору трейдера)
+    "CL":           "Crude Oil",
+    "WTI":          "Crude Oil",
+    "BRENTOIL":     "Crude Oil",
+    "XBR":          "Crude Oil",
+    "BZ":           "Crude Oil",
+    "OIL":          "Crude Oil",
+    "USOIL":        "Crude Oil",
+
+    # Silver
+    "XAG":          "Silver",
+    "SILVER":       "Silver",
+    "SILVERUSD":    "Silver",
+    "SLVUSD":       "Silver",
+
+    # Platinum
+    "XPT":          "Platinum",
+    "PLATINUM":     "Platinum",
+
+    # Palladium
+    "XPD":          "Palladium",
+    "PALLADIUM":    "Palladium",
+
+    # Copper
+    "XCU":          "Copper",
+    "COPPER":       "Copper",
+    "COPPERUSD":    "Copper",
+
+    # Natural Gas
+    "NATGAS":       "Natural Gas",
+    "NATGASUSD":    "Natural Gas",
+    "GAS":          "Natural Gas",
+    "XNG":          "Natural Gas",
+
+    # Cocoa
+    "CC":           "Cocoa",
+
+    # -------- Indices --------
+    # S&P 500 — найпоширеніша форма
+    "SP500":        "S&P 500",
+    "SPX":          "S&P 500",
+    "SPX500":       "S&P 500",
+    "ES":           "S&P 500",
+
+    # Nasdaq-100
+    "QQQ":          "Nasdaq-100",
+    "NDX":          "Nasdaq-100",
+    "NASDAQ100":    "Nasdaq-100",
+    "NAS100":       "Nasdaq-100",
+
+    # Russell 2000
+    "SMALL2000":    "Russell 2000",
+    "IWM":          "Russell 2000",
+    "RUSSELL2000":  "Russell 2000",
+
+    # Dow Jones
+    "DIA":          "Dow Jones",
+    "DJI":          "Dow Jones",
+
+    # Semiconductor indices
+    "SEMIS":        "Semiconductor Index",
+    "SEMI":         "Semiconductor Index",
+
+    # -------- Stocks (родина Alphabet — Class A і Class C в один рядок) --------
+    "GOOGL":        "Alphabet (Google)",
+    "GOOG":         "Alphabet (Google)",
+
+    # -------- Top crypto — перевизначаємо Asset Name на канонічну коротку назву --------
+    # (бо у parquet Asset Name часто містить екзотику типу "Osmosis allBTC" або
+    # "The Ticker Is ETH" — через specific wrapping на біржах Hyperliquid/Lighter).
+    "BTC":          "Bitcoin",
+    "ETH":          "Ethereum",
+    "SOL":          "Solana",
+    "HYPE":         "Hyperliquid",
+    "XRP":          "XRP",
+    "BNB":          "BNB",
+    "DOGE":         "Dogecoin",
+    "ADA":          "Cardano",
+    "AVAX":         "Avalanche",
+    "LINK":         "Chainlink",
+    "LTC":          "Litecoin",
+    "BCH":          "Bitcoin Cash",
+    "DOT":          "Polkadot",
+    "TRX":          "TRON",
+    "TON":          "Toncoin",
+    "NEAR":         "NEAR Protocol",
+    "XLM":          "Stellar",
+    "UNI":          "Uniswap",
+    "ATOM":         "Cosmos",
+    "ARB":          "Arbitrum",
+    "OP":           "Optimism",
+    "PEPE":         "Pepe",
+    "WIF":          "dogwifhat",
+    "SHIB":         "Shiba Inu",
+    "SUI":          "Sui",
+    "APT":          "Aptos",
+    "PENGU":        "Pudgy Penguins",
+    "TRUMP":        "Official Trump",
+    "FARTCOIN":     "Fartcoin",
+    "ASTER":        "Aster DEX",
+}
+ASSET_GROUPS = {k.upper(): v for k, v in ASSET_GROUPS.items()}
+
+
+def display_asset(canonical_base: str, asset_name: str) -> str:
+    """
+    Повертає "відображувану" назву активу для зведеної таблиці Categories.
+
+    Логіка: якщо Canonical Base є у ASSET_GROUPS → групова назва,
+    інакше → Asset Name як є.
+    """
+    if not canonical_base:
+        return asset_name
+    return ASSET_GROUPS.get(canonical_base.upper(), asset_name)
+
+
+# ---------------------------------------------------------------------------
 # Core: categorize — поєднує всі 4 шари
 # ---------------------------------------------------------------------------
 
@@ -569,13 +706,15 @@ def apply(
     category_hint_col: str = None,
 ) -> pd.DataFrame:
     """
-    Додає 6 колонок до DataFrame з тікерами:
+    Додає 7 колонок до DataFrame з тікерами:
       Base              — сирий base з тікеру
       Canonical Base    — після deeper_canonical
       Asset Name        — читабельна назва (Bitcoin, Apple Inc., WTI Crude Oil)
       Category          — Crypto / Stocks / Commodities / FX / Indices
       HIP-3 Dex         — dex-префікс для Hyperliquid (xyz, cash, ...) або None
       Quote Currency    — USDC / USDT / USD
+      Display Asset     — групова назва для Categories page (Gold, Crude Oil, ...)
+                          або Asset Name, якщо актив не у ASSET_GROUPS
 
     Parameters
     ----------
@@ -619,6 +758,9 @@ def apply(
     df["Category"]       = categories
     df["HIP-3 Dex"]      = dexs
     df["Quote Currency"] = quotes
+    # Display Asset — групова назва для Categories page (Gold, Crude Oil, ...);
+    # fallback на Asset Name для активів без групи.
+    df["Display Asset"]  = [display_asset(c, n) for c, n in zip(canons, names)]
 
     return df
 
