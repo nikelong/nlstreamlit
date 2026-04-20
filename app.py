@@ -336,6 +336,46 @@ if selected_exchange is None:
         fig_teaser.update_yaxes(showticklabels=False)
         st.plotly_chart(fig_teaser, use_container_width=True)
 
+        # ---- Global distribution table — ті самі дані, але у табличному вигляді ----
+        dist_stats = (
+            combined_df.groupby("Category")
+            .agg(
+                Pairs=("Pair", "count"),
+                UniqueAssets=("Asset Name", "nunique"),
+                Volume=("Volume 24h (USD)", "sum"),
+            )
+            .reindex(CATEGORY_ORDER)
+            .dropna()
+        )
+        dist_total = dist_stats["Volume"].sum()
+        dist_rows = []
+        for cat, row in dist_stats.iterrows():
+            dist_rows.append({
+                "Category":      f"{CATEGORY_EMOJI[cat]} {cat}",
+                "Pair Count":    int(row["Pairs"]),
+                "Unique Assets": int(row["UniqueAssets"]),
+                "Volume 24h":    row["Volume"],
+                "% of Total":    row["Volume"] / dist_total * 100 if dist_total else 0,
+            })
+        # Додаємо підсумковий рядок
+        dist_rows.append({
+            "Category":      "**Total**",
+            "Pair Count":    int(dist_stats["Pairs"].sum()),
+            "Unique Assets": int(combined_df["Asset Name"].dropna().nunique()),
+            "Volume 24h":    dist_total,
+            "% of Total":    100.0,
+        })
+        dist_df = pd.DataFrame(dist_rows)
+        st.dataframe(
+            dist_df, use_container_width=True, hide_index=True,
+            column_config={
+                "Pair Count":    st.column_config.NumberColumn(format="%d"),
+                "Unique Assets": st.column_config.NumberColumn(format="%d"),
+                "Volume 24h":    USD_FMT,
+                "% of Total":    PCT_FMT,
+            },
+        )
+
     st.divider()
 
     # Pie: market share
