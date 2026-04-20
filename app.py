@@ -19,6 +19,7 @@ EXCHANGES = {
         "price_col":    "Price (USDC)",
         "color_col":    "Funding Rate",
         "color_format": "%.8f",
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/1208/small/Hyperliquid_logo.png?1706865217",
     },
     "Aster DEX": {
         "parquet":      "data/aster_cache.parquet",
@@ -30,6 +31,7 @@ EXCHANGES = {
         "price_col":    "Price (USDT)",
         "color_col":    "Change 24h (%)",
         "color_format": None,
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/22084/small/aster-profile-200.png?1756966162",
     },
     "Lighter": {
         "parquet":      "data/lighter_cache.parquet",
@@ -41,10 +43,12 @@ EXCHANGES = {
         "price_col":    "Price",
         "color_col":    "Change 24h (%)",
         "color_format": None,
+        "logo_url":     "https://coin-images.coingecko.com/markets/images/22097/small/lighter.jpg?1758003181",
     },
 }
 
 OVERVIEW_KEY = "📊 Overview"
+EXCHANGES_HEADER_KEY = "── 🏛 Exchanges ──"  # Псевдо-заголовок: "обрати" не дасть ефекту
 
 # ---------------------------------------------------------------------------
 # Завантаження даних
@@ -85,23 +89,42 @@ def fmt_usd(val) -> str:
         return "—"
 
 # ---------------------------------------------------------------------------
-# Sidebar — один radio: Overview + усі біржі в спільному списку
-# Розділення секцій робиться через captions (вони не клікабельні)
+# Sidebar — один radio, але з заголовком "Exchanges" як псевдо-роздільником
+# Markdown заголовок над radio + між Overview та біржами вставимо роздільник
 # ---------------------------------------------------------------------------
 
 st.sidebar.title("Perp DEX")
 
-# Опції — Overview перший пункт, потім біржі
-nav_options = [OVERVIEW_KEY] + list(EXCHANGES.keys())
+# Callback: при кліку на Overview — скидаємо вибір біржі
+def _reset_exchange():
+    st.session_state.nav_exchange = None
 
-# Captions перед кожним пунктом: робимо їх для секцій
-# (Streamlit не дає вбудованих "груп" в radio, тому спершу секція 1 — Overview один,
-# потім візуальний роздільник, потім "Exchanges" з рештою)
-selected = st.sidebar.radio(
-    label="Навігація",
-    options=nav_options,
+# Спершу окремий radio для Overview
+st.sidebar.radio(
+    label="overview",
+    options=[OVERVIEW_KEY],
     label_visibility="collapsed",
+    key="nav_overview",
+    on_change=_reset_exchange,
 )
+
+# Заголовок секції Exchanges — як markdown, не клікабельний
+st.sidebar.markdown("### 🏛 Exchanges")
+
+# Окремий radio для бірж — index=None означає "нічого не обрано за замовчуванням"
+exchange_clicked = st.sidebar.radio(
+    label="exchanges",
+    options=list(EXCHANGES.keys()),
+    label_visibility="collapsed",
+    index=None,
+    key="nav_exchange",
+)
+
+# Логіка: якщо у "Exchanges" обрано щось — показуємо біржу, інакше Overview
+if exchange_clicked is not None:
+    selected = exchange_clicked
+else:
+    selected = OVERVIEW_KEY
 
 st.sidebar.divider()
 st.sidebar.markdown("### ℹ️ Про дашборд")
@@ -114,13 +137,12 @@ st.sidebar.markdown(
 # Main content
 # ---------------------------------------------------------------------------
 
-st.title("Perp DEX — Market Data")
-
 # ============================================================================
 # Розділ: OVERVIEW
 # ============================================================================
 
 if selected == OVERVIEW_KEY:
+    st.title("Perp DEX — Market Data")
     st.caption("Cross-exchange analytics · дані з локального кешу")
 
     dfs = {name: load_exchange(name) for name in EXCHANGES}
@@ -132,7 +154,6 @@ if selected == OVERVIEW_KEY:
             f"Запустіть fetch через GitHub Actions."
         )
 
-    # Total volumes
     volumes = {name: df["Volume 24h (USD)"].sum() if not df.empty else 0
                for name, df in dfs.items()}
     vol_total = sum(volumes.values())
@@ -145,7 +166,6 @@ if selected == OVERVIEW_KEY:
 
     st.divider()
 
-    # Pie
     st.subheader("Market Share by Volume 24h")
     pie_df = pd.DataFrame({
         "Exchange": list(volumes.keys()),
@@ -162,7 +182,6 @@ if selected == OVERVIEW_KEY:
 
     st.divider()
 
-    # Top 10 grouped bar
     st.subheader("Top 10 Pairs by Volume — per Exchange")
     combined_rows = []
     for name, df in dfs.items():
@@ -184,7 +203,6 @@ if selected == OVERVIEW_KEY:
 
     st.divider()
 
-    # Cross-exchange common pairs
     st.subheader("Cross-Exchange Comparison — Common Pairs")
     st.caption("Pairs traded simultaneously on multiple exchanges")
 
@@ -230,11 +248,18 @@ else:
     cfg = EXCHANGES[selected]
     df = load_exchange(selected)
 
-    st.markdown(
-        f"### {selected}\n\n"
-        f"Source: [{cfg['source_label']}]({cfg['source_url']}) · "
-        f"🔗 [{cfg['trade_label']}]({cfg['trade_url']})"
-    )
+    # Заголовок з логотипом — лого зліва, назва справа
+    logo_col, title_col = st.columns([1, 12], vertical_alignment="center")
+    with logo_col:
+        st.image(cfg["logo_url"], width=64)
+    with title_col:
+        st.markdown(
+            f"# {selected}\n\n"
+            f"Source: [{cfg['source_label']}]({cfg['source_url']}) · "
+            f"🔗 [{cfg['trade_label']}]({cfg['trade_url']})"
+        )
+
+    st.divider()
 
     if df.empty:
         st.error(
