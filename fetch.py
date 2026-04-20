@@ -692,12 +692,12 @@ if __name__ == "__main__":
 
     # Manual audit helper — топ-10 невідомих
     all_combined = pd.concat(
-        [df[["Canonical Base", "Asset Name", "Volume 24h (USD)"]]
-         for df in all_dfs.values() if not df.empty and "Canonical Base" in df.columns],
+        [df.assign(Exchange=ex_name)[["Exchange", "Canonical Base", "Asset Name", "Volume 24h (USD)"]]
+         for ex_name, df in all_dfs.items() if not df.empty and "Canonical Base" in df.columns],
         ignore_index=True,
     ) if all_dfs else pd.DataFrame()
     if not all_combined.empty:
-        categorize.print_unknowns(all_combined, "ALL", top_n=10)
+        categorize.print_unknowns(all_combined, "ALL", top_n=-1)
 
     print("═" * 60)
     print(f"📊 Готово за {time.time()-t0:.1f}s")
