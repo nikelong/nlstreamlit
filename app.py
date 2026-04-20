@@ -44,6 +44,8 @@ EXCHANGES = {
     },
 }
 
+OVERVIEW_KEY = "📊 Overview"
+
 # ---------------------------------------------------------------------------
 # Завантаження даних — універсальний loader для будь-якої біржі
 # ---------------------------------------------------------------------------
@@ -84,16 +86,50 @@ def fmt_usd(val) -> str:
         return "—"
 
 # ---------------------------------------------------------------------------
-# Sidebar — вибір біржі для табу "Exchange Detail"
+# Sidebar — головний навігатор: Overview + список бірж в одному radio
 # ---------------------------------------------------------------------------
 
-st.sidebar.title("🏛 Exchanges")
-st.sidebar.caption("Виберіть біржу для детального перегляду")
+st.sidebar.title("Perp DEX")
 
-selected_exchange = st.sidebar.radio(
-    label="Виберіть біржу",
+# Ініціалізація стану перед callback-ами
+if "active_section" not in st.session_state:
+    st.session_state.active_section = "overview"
+
+# Callback-и для миттєвого переключення активної секції при кліку
+def _on_overview_click():
+    st.session_state.active_section = "overview"
+
+def _on_exchange_click():
+    st.session_state.active_section = "exchange"
+
+# Секція 1: Overview
+overview_label = "📊 Overview"
+if st.session_state.active_section == "overview":
+    overview_label = f"**▸ {overview_label}**"
+st.sidebar.markdown(f"### {overview_label}")
+
+st.sidebar.radio(
+    label="overview-nav",
+    options=[OVERVIEW_KEY],
+    label_visibility="collapsed",
+    key="nav_overview",
+    on_change=_on_overview_click,
+)
+
+st.sidebar.divider()
+
+# Секція 2: Exchanges
+exchanges_label = "🏛 Exchanges"
+if st.session_state.active_section == "exchange":
+    exchanges_label = f"**▸ {exchanges_label}**"
+st.sidebar.markdown(f"### {exchanges_label}")
+
+exchange_selected = st.sidebar.radio(
+    label="exchange-nav",
     options=list(EXCHANGES.keys()),
     label_visibility="collapsed",
+    key="nav_exchange",
+    on_change=_on_exchange_click,
 )
 
 st.sidebar.divider()
@@ -104,18 +140,16 @@ st.sidebar.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# Top-level UI
+# Main content — рендеримо обраний розділ
 # ---------------------------------------------------------------------------
 
 st.title("Perp DEX — Market Data")
 
-tab_overview, tab_exchange = st.tabs(["📊 Overview", "🏛 Exchange Detail"])
+# ============================================================================
+# Розділ: OVERVIEW
+# ============================================================================
 
-# ---------------------------------------------------------------------------
-# TAB: Overview
-# ---------------------------------------------------------------------------
-
-with tab_overview:
+if st.session_state.active_section == "overview":
     st.caption("Cross-exchange analytics · дані з локального кешу")
 
     # Завантажити всі біржі
@@ -218,16 +252,16 @@ with tab_overview:
     else:
         st.info("No common pairs found.")
 
-# ---------------------------------------------------------------------------
-# TAB: Exchange Detail (вибрана біржа з sidebar)
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Розділ: EXCHANGE DETAIL (вибрана біржа з sidebar)
+# ============================================================================
 
-with tab_exchange:
-    cfg = EXCHANGES[selected_exchange]
-    df = load_exchange(selected_exchange)
+else:
+    cfg = EXCHANGES[exchange_selected]
+    df = load_exchange(exchange_selected)
 
     st.markdown(
-        f"### {selected_exchange}\n\n"
+        f"### {exchange_selected}\n\n"
         f"Source: [{cfg['source_label']}]({cfg['source_url']}) · "
         f"🔗 [{cfg['trade_label']}]({cfg['trade_url']})"
     )
