@@ -647,12 +647,14 @@ def fetch_apex():
 
 
 # ===========================================================================
-# 11. Cloudflare Radar — гео-дані (top locations) для 10 бірж
+
+# 11. Cloudflare Radar — гео-дані DNS-запитів до доменів (Visitor location)
 # ===========================================================================
-# Endpoint: /radar/ranking/domain/{domain}?includeTopLocations=true
-# Повертає ранг домену + масив топ-країн з %-часткою трафіку.
-# Працює тільки для доменів, які у Cloudflare ranking (~top-1M за DNS-трафіком 1.1.1.1).
-# Для доменів без даних — пропускаємо (API поверне 404 або порожній topLocations).
+# Endpoint: /radar/dns/top/locations?domain={domain}
+# Повертає країну-джерело DNS-запитів на домен через 1.1.1.1 resolver.
+# Саме ці дані відображаються на radar.cloudflare.com у секції:
+#   DNS → Domain Information → Visitor location
+# dateRange=7d — "Last 7 days" (як у UI), limit=20 — топ-20 країн.
 
 RADAR_DOMAINS = {
     "Hyperliquid":       "hyperliquid.xyz",
@@ -680,14 +682,19 @@ def fetch_cloudflare_radar():
 
     headers = {"Authorization": f"Bearer {token}"}
     rows = []
-    fetched_at = pd.Timestamp.utcnow().isoformat()
+    fetched_at = pd.Timestamp.now("UTC").isoformat()
 
     for exchange, domain in RADAR_DOMAINS.items():
         try:
             r = requests.get(
-                f"https://api.cloudflare.com/client/v4/radar/ranking/domain/{domain}",
+                "https://api.cloudflare.com/client/v4/radar/dns/top/locations",
                 headers=headers,
-                params={"includeTopLocations": "true", "limit": 100},
+                params={
+                    "domain":    domain,
+                    "dateRange": "7d",
+                    "limit":     20,
+                    "format":    "json",
+                },
                 timeout=15,
             )
             if r.status_code != 200:
@@ -695,22 +702,21 @@ def fetch_cloudflare_radar():
                 continue
 
             result = r.json().get("result", {})
-            details = result.get("details_0", {})
-            top_locations = details.get("topLocations", [])
+            top_locations = result.get("top_0", [])
 
             if not top_locations:
                 print(f"  ⚠️  {exchange} ({domain}): no top locations")
                 continue
 
-            for loc in top_locations:
-                alpha2 = loc.get("locationCode", "")
+            for rank, loc in enumerate(top_locations, start=1):
+                alpha2 = loc.get("clientCountryAlpha2", "")
                 rows.append({
                     "Exchange":     exchange,
                     "Domain":       domain,
                     "CountryCode":  alpha2,
-                    "CountryName":  loc.get("locationName", ""),
+                    "CountryName":  loc.get("clientCountryName", ""),
                     "Share":        float(loc.get("value", 0)),
-                    "Rank":         loc.get("rank", 0) if loc.get("rank") else 0,
+                    "Rank":         rank,
                     "Flag":         _flag_emoji(alpha2),
                     "FetchedAt":    fetched_at,
                 })
@@ -727,34 +733,67 @@ def fetch_cloudflare_radar():
     df.to_parquet("data/radar_cache.parquet", index=False)
     print(f"Cloudflare Radar: {len(df)} rows saved")
 
-# ===========================================================================
-# Запуск — кожна біржа в try/except, щоб одна помилка не зламала весь fetch
+
+# Запуск — всі біржі у try/except, щоб одна помилка не зламала pipeline
 # ===========================================================================
 
 ALL_FETCHERS = [
-    ("Hyperliquid", fetch_hyperliquid),
-    ("Aster",       fetch_aster),
-    ("Lighter",     fetch_lighter),
-    ("Paradex",     fetch_paradex),
-    ("Variational", fetch_variational),
-    ("Extended",    fetch_extended),
-    ("Pacifica",    fetch_pacifica),
-    ("GRVT",        fetch_grvt),
-    ("EdgeX",       fetch_edgex),
-    ("ApeX Omni",   fetch_apex),
+    ("Hyperliquid",      fetch_hyperliquid),
+    ("Aster DEX",        fetch_aster),
+    ("Lighter",          fetch_lighter),
+    ("Paradex",          fetch_paradex),
+    ("Variational Omni", fetch_variational),
+    ("Extended",         fetch_extended),
+    ("Pacifica",         fetch_pacifica),
+    ("GRVT",             fetch_grvt),
+    ("EdgeX",            fetch_edgex),
+    ("ApeX Omni",        fetch_apex),
     ("Cloudflare Radar", fetch_cloudflare_radar),
 ]
 
+
 if __name__ == "__main__":
-    print("Починаємо збір даних з 10 бірж + Cloudflare Radar...")
+    print("═" * 60)
+    print(f"🚀 Починаю збір з 10 бірж")
+    print("═" * 60)
+
+    # Прогрій CoinGecko cache один раз
+    categorize.load_coingecko_cache()
+    print("─" * 60)
+
     t0 = time.time()
+    all_dfs = {}
     failed = []
+
     for name, fn in ALL_FETCHERS:
-        t1 = time.time()
         try:
-            fn()
-            print(f"  ✅ {name}: {time.time()-t1:.1f}s")
+            df = fn()
+            # Не всі фетчери повертають DataFrame (наприклад, Cloudflare Radar
+            # пише parquet без return). Додаємо в all_dfs лише реальні DF.
+            if df is not None:
+                all_dfs[name] = df
+            log("─" * 60)
         except Exception as e:
-            print(f"  ❌ {name}: {type(e).__name__}: {e}")
+            log(f"❌ {name}: {type(e).__name__}: {e}")
             failed.append(name)
-    print(f"\nГотово за {time.time()-t0:.1f}s. Невдач: {len(failed)} ({', '.join(failed) if failed else '—'})")
+            log("─" * 60)
+
+    # Фінальний summary по категоріях
+    categorize.print_summary(all_dfs)
+
+    # Manual audit helper — топ-10 невідомих
+    all_combined = pd.concat(
+        [df.assign(Exchange=ex_name)[["Exchange", "Canonical Base", "Asset Name", "Volume 24h (USD)"]]
+         for ex_name, df in all_dfs.items() if not df.empty and "Canonical Base" in df.columns],
+        ignore_index=True,
+    ) if all_dfs else pd.DataFrame()
+    if not all_combined.empty:
+        categorize.print_unknowns(all_combined, "ALL", top_n=-1)
+
+    print("═" * 60)
+    print(f"📊 Готово за {time.time()-t0:.1f}s")
+    if failed:
+        print(f"❌ Невдачі: {', '.join(failed)}")
+    else:
+        print(f"✅ Усі 10 бірж успішно")
+    print("═" * 60)
