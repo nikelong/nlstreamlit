@@ -110,7 +110,7 @@ def _raw_base(ticker: str, base_hint: str = "") -> str:
             t = t.split(delim)[0]
             break
 
-    t = t.upper().rstrip("-_")
+    t = t.upper().strip("-_/ ")
 
     # Aster "BTCUSD1", "ETHUSD2" — знімаємо цифровий суфікс ПІСЛЯ USD
     # Це специфічно Aster: USD1/USD2 — варіанти однієї пари
@@ -122,6 +122,9 @@ def _raw_base(ticker: str, base_hint: str = "") -> str:
         if t.endswith(suffix) and len(t) > len(suffix):
             t = t[:-len(suffix)]
             break
+
+    # Финальне підчищення хвостових розділювачів (Pacifica грабелька: 'SOL-' → 'SOL')
+    t = t.strip("-_/ ")
 
     return t
 
@@ -432,10 +435,80 @@ USER_OVERRIDES: dict[str, tuple[str, str]] = {
     "AVAAI":       ("Crypto", "Ava AI"),
     "NEIROETH":    ("Crypto", "Neiro on Ethereum"),
 
-    # === Крок 3.5: Crypto — unidentified / дрібні токени без надійних джерел ===
-    "AITO":        ("Crypto", "AITO"),
-    "ERNEL":       ("Crypto", "ERNEL"),
-    "ITE":         ("Crypto", "ITE"),
+    # === Крок 3.5 round 2: Identified via web_search ===
+
+    # High-volume memecoins та token launches
+    "BROCCOLI714":  ("Crypto", "CZ's Dog Broccoli (BNB)"),
+    "ESPRESSO":     ("Crypto", "Espresso Network"),
+    "1NEIRO":       ("Crypto", "Neiro v1"),
+    "VANATOKEN":    ("Crypto", "Vana"),
+    "RNDR":         ("Crypto", "Render Network (legacy ERC-20)"),
+    "ALLORA":       ("Crypto", "Allora Network"),
+    "METEORA":      ("Crypto", "Meteora (MET)"),
+    "SENTIENT":     ("Crypto", "Sentient (AI)"),
+    "RONIN":        ("Crypto", "Ronin Network"),
+    "BCHSV":        ("Crypto", "Bitcoin Cash SV"),
+    "SOPHON":       ("Crypto", "Sophon"),
+    "LAGRANGE":     ("Crypto", "Lagrange (ZK)"),
+    "ASPECTA":      ("Crypto", "Aspecta"),
+    "VELODROME":    ("Crypto", "Velodrome (VELO)"),
+    "BBIT":         ("Crypto", "BBIT"),
+
+    # Stocks (tokenized ETFs on Lighter xStock)
+    "MAGS":         ("Stocks", "Roundhill Magnificent Seven ETF"),
+
+    # Indices (Aster DEX)
+    "BTCDOM":       ("Indices", "Bitcoin Dominance Index"),
+
+    # === EdgeX v2-contracts — delisted dupes with minimal volume (Crypto for UI clarity) ===
+    "BNB2":         ("Crypto", "BNB (v2 contract)"),
+    "LTC2":         ("Crypto", "Litecoin (v2 contract)"),
+    "SUI2":         ("Crypto", "Sui (v2 contract)"),
+    "TON2":         ("Crypto", "TON (v2 contract)"),
+    "TRX2":         ("Crypto", "Tron (v2 contract)"),
+    "ARB2":         ("Crypto", "Arbitrum (v2 contract)"),
+    "OP2":          ("Crypto", "Optimism (v2 contract)"),
+    "DOT2":         ("Crypto", "Polkadot (v2 contract)"),
+    "CRV2":         ("Crypto", "Curve (v2 contract)"),
+    "ENS2":         ("Crypto", "ENS (v2 contract)"),
+    "JTO2":         ("Crypto", "Jito (v2 contract)"),
+    "JUP2":         ("Crypto", "Jupiter (v2 contract)"),
+    "UNI2":         ("Crypto", "Uniswap (v2 contract)"),
+    "ATOM2":        ("Crypto", "Cosmos (v2 contract)"),
+    "NEAR2":        ("Crypto", "NEAR (v2 contract)"),
+    "ONDO2":        ("Crypto", "Ondo (v2 contract)"),
+    "LDO2":         ("Crypto", "Lido (v2 contract)"),
+    "ORDI2":        ("Crypto", "ORDI (v2 contract)"),
+    "SEI2":         ("Crypto", "Sei (v2 contract)"),
+    "FET2":         ("Crypto", "Fetch.ai (v2 contract)"),
+    "ENA2":         ("Crypto", "Ethena (v2 contract)"),
+    "APT2":         ("Crypto", "Aptos (v2 contract)"),
+    "AVAX2":        ("Crypto", "Avalanche (v2 contract)"),
+    "LINK2":        ("Crypto", "Chainlink (v2 contract)"),
+    "ADA2":         ("Crypto", "Cardano (v2 contract)"),
+    "WIF2":         ("Crypto", "dogwifhat (v2 contract)"),
+    "XRP2":         ("Crypto", "XRP (v2 contract)"),
+    "PEPE2":        ("Crypto", "PEPE (v2 contract)"),
+    "PENGU2":       ("Crypto", "Pengu (v2 contract)"),
+    "PNUT2":        ("Crypto", "Peanut (v2 contract)"),
+    "TRUMP2":       ("Crypto", "Trump (v2 contract)"),
+    "AITO2":        ("Crypto", "AITO (v2 contract)"),
+    "WLD2":         ("Crypto", "Worldcoin (v2 contract)"),
+
+    # === Крок 3.5 round 2: Variational-specific markets (unidentified via web_search) ===
+    # Всі дрібні ($0-40K volume), імовірно pre-launch markets / points / custom perps
+    "OMA":          ("Crypto", "OMA"),
+    "SKRS":         ("Crypto", "SKRS"),
+    "MNO":          ("Crypto", "MNO"),
+    "FF0":          ("Crypto", "FF0"),
+    "BTR0":         ("Crypto", "BTR0"),
+    "OVERTAKE":     ("Crypto", "OVERTAKE"),
+    "APRO":         ("Crypto", "APRO"),
+    "ARCSOL":       ("Crypto", "ARCSOL"),
+    "HUMIDIFI":     ("Crypto", "HUMIDIFI"),
+    "BABYL":        ("Crypto", "BABYL"),
+    "TUTORIAL":     ("Crypto", "TUTORIAL"),
+    "BITLIGHT":     ("Crypto", "BITLIGHT"),
 }
 
 # Нормалізуємо ключі в USER_OVERRIDES до upper case
