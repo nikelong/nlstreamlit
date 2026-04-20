@@ -112,14 +112,16 @@ def _raw_base(ticker: str, base_hint: str = "") -> str:
 
     t = t.upper().rstrip("-_")
 
+    # Aster "BTCUSD1", "ETHUSD2" — знімаємо цифровий суфікс ПІСЛЯ USD
+    # Це специфічно Aster: USD1/USD2 — варіанти однієї пари
+    # Не зачіпає SP500/XYZ100/MAG7 — в них цифри НЕ після USD
+    t = re.sub(r"USD[\d]+$", "USD", t)
+
     # Приклеєний quote-суфікс: "BTCUSDT" → "BTC"
     for suffix in ("USDC", "USDT", "USD", "BUSD"):
         if t.endswith(suffix) and len(t) > len(suffix):
             t = t[:-len(suffix)]
             break
-
-    # Aster "BTCUSD1" → "BTC" (одиничний суфікс-варіант)
-    t = re.sub(r"\d+$", "", t) if len(t) > 3 and t[-1].isdigit() else t
 
     return t
 
