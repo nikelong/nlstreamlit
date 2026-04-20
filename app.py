@@ -186,6 +186,17 @@ def fmt_usd(val) -> str:
         return "—"
 
 # ---------------------------------------------------------------------------
+# Глобальне сортування бірж за 24h volume (один раз, до рендеру)
+# Цей порядок використовується скрізь: sidebar, картки, графіки, cross-table
+# ---------------------------------------------------------------------------
+
+ALL_DFS = {name: load_exchange(name) for name in EXCHANGES}
+VOLUMES = {name: df["Volume 24h (USD)"].sum() if not df.empty else 0
+           for name, df in ALL_DFS.items()}
+# Біржі у порядку убування volume — найбільша зверху
+SORTED_EXCHANGES = sorted(EXCHANGES.keys(), key=lambda n: VOLUMES[n], reverse=True)
+
+# ---------------------------------------------------------------------------
 # Sidebar — кнопка Overview (action) + radio для вибору біржі (selection)
 # ---------------------------------------------------------------------------
 
@@ -204,7 +215,7 @@ st.sidebar.markdown("### 🏛 Exchanges")
 
 selected_exchange = st.sidebar.radio(
     label="exchanges",
-    options=list(EXCHANGES.keys()),
+    options=SORTED_EXCHANGES,
     label_visibility="collapsed",
     index=None,
     key="nav_exchange",
@@ -225,7 +236,7 @@ if selected_exchange is None:
     st.title("Perp DEX — Market Data")
     st.caption("Cross-exchange analytics · дані з локального кешу")
 
-    dfs = {name: load_exchange(name) for name in EXCHANGES}
+    dfs = ALL_DFS  # вже завантажено вище
 
     errors = [name for name, df in dfs.items() if df.empty]
     if errors:
@@ -234,8 +245,8 @@ if selected_exchange is None:
             f"Запустіть fetch через GitHub Actions."
         )
 
-    volumes = {name: df["Volume 24h (USD)"].sum() if not df.empty else 0
-               for name, df in dfs.items()}
+    # Volumes у відсортованому порядку
+    volumes = {name: VOLUMES[name] for name in SORTED_EXCHANGES}
     vol_total = sum(volumes.values())
 
     # Total volumes — total одним великим metric, інші — нижче в сітці
@@ -326,8 +337,8 @@ if selected_exchange is None:
         col_config["Total Volume"] = USD_FMT
         col_config["Exchanges"]    = st.column_config.NumberColumn(format="%d")
         cross_df = pd.DataFrame(cross_rows).sort_values("Total Volume", ascending=False).reset_index(drop=True)
-        # Reorder: Pair, Exchanges, Total Volume, потім біржі
-        col_order = ["Pair", "Exchanges", "Total Volume"] + list(EXCHANGES.keys())
+        # Reorder: Pair, Exchanges, Total Volume, потім біржі у порядку убування volume
+        col_order = ["Pair", "Exchanges", "Total Volume"] + SORTED_EXCHANGES
         cross_df = cross_df[[c for c in col_order if c in cross_df.columns]]
         st.dataframe(
             cross_df, use_container_width=True, hide_index=True,
