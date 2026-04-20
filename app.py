@@ -47,9 +47,6 @@ EXCHANGES = {
     },
 }
 
-OVERVIEW_KEY = "📊 Overview"
-EXCHANGES_HEADER_KEY = "── 🏛 Exchanges ──"  # Псевдо-заголовок: "обрати" не дасть ефекту
-
 # ---------------------------------------------------------------------------
 # Завантаження даних
 # ---------------------------------------------------------------------------
@@ -89,42 +86,33 @@ def fmt_usd(val) -> str:
         return "—"
 
 # ---------------------------------------------------------------------------
-# Sidebar — один radio, але з заголовком "Exchanges" як псевдо-роздільником
-# Markdown заголовок над radio + між Overview та біржами вставимо роздільник
+# Sidebar — кнопка Overview (action) + radio для вибору біржі (selection)
 # ---------------------------------------------------------------------------
 
 st.sidebar.title("Perp DEX")
 
-# Callback: при кліку на Overview — скидаємо вибір біржі
-def _reset_exchange():
+# Callback кнопки Overview: скидає вибір біржі
+def _go_to_overview():
     st.session_state.nav_exchange = None
 
-# Спершу окремий radio для Overview
-st.sidebar.radio(
-    label="overview",
-    options=[OVERVIEW_KEY],
-    label_visibility="collapsed",
-    key="nav_overview",
-    on_change=_reset_exchange,
+# Кнопка Overview — клікабельна дія, не toggle
+st.sidebar.button(
+    "📊 Overview",
+    on_click=_go_to_overview,
+    use_container_width=True,
 )
 
-# Заголовок секції Exchanges — як markdown, не клікабельний
+# Заголовок секції
 st.sidebar.markdown("### 🏛 Exchanges")
 
-# Окремий radio для бірж — index=None означає "нічого не обрано за замовчуванням"
-exchange_clicked = st.sidebar.radio(
+# Radio для бірж — index=None, нічого не обрано на старті
+selected_exchange = st.sidebar.radio(
     label="exchanges",
     options=list(EXCHANGES.keys()),
     label_visibility="collapsed",
     index=None,
     key="nav_exchange",
 )
-
-# Логіка: якщо у "Exchanges" обрано щось — показуємо біржу, інакше Overview
-if exchange_clicked is not None:
-    selected = exchange_clicked
-else:
-    selected = OVERVIEW_KEY
 
 st.sidebar.divider()
 st.sidebar.markdown("### ℹ️ Про дашборд")
@@ -134,14 +122,14 @@ st.sidebar.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# Main content
+# Main content — Overview якщо біржа не обрана, інакше детально по біржі
 # ---------------------------------------------------------------------------
 
 # ============================================================================
-# Розділ: OVERVIEW
+# Розділ: OVERVIEW (за замовчуванням)
 # ============================================================================
 
-if selected == OVERVIEW_KEY:
+if selected_exchange is None:
     st.title("Perp DEX — Market Data")
     st.caption("Cross-exchange analytics · дані з локального кешу")
 
@@ -245,16 +233,16 @@ if selected == OVERVIEW_KEY:
 # ============================================================================
 
 else:
-    cfg = EXCHANGES[selected]
-    df = load_exchange(selected)
+    cfg = EXCHANGES[selected_exchange]
+    df = load_exchange(selected_exchange)
 
-    # Заголовок з логотипом — лого зліва, назва справа
+    # Заголовок з логотипом
     logo_col, title_col = st.columns([1, 12], vertical_alignment="center")
     with logo_col:
         st.image(cfg["logo_url"], width=64)
     with title_col:
         st.markdown(
-            f"# {selected}\n\n"
+            f"# {selected_exchange}\n\n"
             f"Source: [{cfg['source_label']}]({cfg['source_url']}) · "
             f"🔗 [{cfg['trade_label']}]({cfg['trade_url']})"
         )
