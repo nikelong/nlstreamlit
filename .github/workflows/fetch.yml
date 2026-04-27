@@ -33,3 +33,11 @@ jobs:
           git add data/
           git diff --cached --quiet || git commit -m "chore: update parquet cache"
           git push
+
+      - name: Wait for Streamlit to sync parquet files
+        run: sleep 15
+
+      - name: Trigger Streamlit redeploy
+        run: |
+          git commit --allow-empty -m "chore: trigger redeploy"
+          git push
